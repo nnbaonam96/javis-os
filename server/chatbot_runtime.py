@@ -1240,6 +1240,39 @@ def _ghi_bo_qua(bot_id: str, cfg: dict, meta: dict, text: str, ma: str, tl: dict
     })
 
 
+async def _hoi_truoc_tra_loi(bot_id: str, cfg: dict, text: str, meta: dict, kenh: str) -> str:
+    """Hỏi hook `truoc_tra_loi` của plugin (xem plugins_host.fire_truoc_tra_loi). Chuỗi rỗng = không
+    ai trả lời. Mọi lỗi ở đây đều nuốt: cửa này hỏng thì model trả lời như thường, bot không im."""
+    try:
+        import plugins_host
+        import turn_context
+        vault = cfg.get("brain") or None
+        if not plugins_host.has_reply_hooks(vault):
+            return ""
+        luot = turn_context.from_meta(kenh, meta, la_chu=False)
+        return await plugins_host.fire_truoc_tra_loi(vault, {
+            "text": text, "turn": luot, "bot_id": bot_id, "bot_slug": cfg.get("slug") or ""}) or ""
+    except Exception as e:      # noqa: BLE001 - cửa nghe trước hỏng không được làm mất câu trả lời
+        print(f"[chatbot {bot_id}] truoc_tra_loi: {type(e).__name__}: {e}", file=sys.stderr)
+        return ""
+
+
+def _xong_truoc_tra_loi(bot_id: str, cfg: dict, text: str, meta: dict, chat_id: str, dap: str) -> dict:
+    """Lượt do plugin trả lời: ghi nhật ký + Hộp thư y như lượt model, để chủ soi lại được."""
+    run = _RUNNING.get(bot_id)
+    if run:
+        run["answered"] = run.get("answered", 0) + 1
+        run["last_at"] = time.time()
+    _BI_LIEN_TIEP[(bot_id, chat_id)] = 0
+    chatbot_log.ghi(bot_id, {
+        "chat_id": chat_id, "chat_type": meta.get("chat_type"), "user_name": meta.get("user_name"),
+        "hoi": text, "dap": dap, "loi": "", "co_tai_lieu": False, "nguon": "plugin",
+        "chuyen_nguoi": False, "bi": False, "muc_quyen": cfg.get("muc_quyen") or "suggest",
+    })
+    ghi_tin_bot(cfg, meta, dap)
+    return {"text": dap, "files": []}
+
+
 def _make_answer_fn(bot_id: str):
     async def _answer(text, meta=None, progress=None):
         cfg = chatbot_store.get_bot(bot_id)
@@ -1306,6 +1339,14 @@ def _make_answer_fn(bot_id: str):
         if conversations.che_do(kenh_luot, aid_luot, chat_id) == "human":
             _rp_retract(rp_dec, "taken_over")
             return {"text": "", "files": [], "im_lang": True}
+
+        # Cửa nghe trước (hook `truoc_tra_loi`): plugin được trả lời THAY lượt model, nhận câu
+        # nguyên văn + ai đang nói. Đứng SAU mọi chốt quyền ở trên (bot được phép ở cuộc chat này,
+        # người thật chưa tiếp quản) và TRƯỚC mọi thứ tốn kém (tra tài liệu, engine). Không plugin
+        # nào trả lời -> đi tiếp y như chưa có cửa này.
+        dap_truoc = await _hoi_truoc_tra_loi(bot_id, cfg, text, meta or {}, kenh_luot)
+        if dap_truoc:
+            return _xong_truoc_tra_loi(bot_id, cfg, text, meta or {}, chat_id, dap_truoc)
 
         # Tra tài liệu TRƯỚC rồi nhét vào prompt, thay vì trông vào việc model tự chịu mở file.
         # Lượt Tự đánh giá đã tra ở trên rồi, dùng lại kết quả đó chứ không quét đĩa lần hai.

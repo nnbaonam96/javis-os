@@ -265,6 +265,16 @@ Ngoài tool, plugin còn đăng ký được hook. Bản hiện tại có hai s�
 
 Hook bọc **mọi** tool call, kể cả tool của MCP và tool lõi, chứ không riêng tool của plugin đó. Dùng để ghi nhật ký, đếm, cảnh báo. Khi không plugin nào đăng ký hook, Javis không bọc gì nên không mất thêm hiệu năng. Plugin `tool-audit` là ví dụ chạy được: bật nó lên là mỗi lượt gọi tool được đếm vào một file riêng của plugin.
 
+### Hook `truoc_tra_loi`: trả lời thay bot chuyên trách, trước lượt model
+
+Dành cho app có bộ đọc câu riêng (vd sổ ghi chép nhận "ăn sáng 35k"): tin của người nhắn phải tới app **nguyên văn** và **trước** khi model chạm vào. `pre_tool_call` không làm được việc này vì lúc đó model đã đọc và chép lại câu.
+
+| Sự kiện | Bắn khi nào | Nhận được gì |
+|---|---|---|
+| `truoc_tra_loi` | Ở bot chuyên trách, sau các chốt quyền (bot được phép ở cuộc chat, người thật chưa Tiếp quản), trước khi tra tài liệu và gọi model | `text` (nguyên văn), `turn`, `bot_id`, `bot_slug` |
+
+Trả `{"reply": "câu"}` thì bot gửi đúng câu đó và **không gọi model** (Hộp thư và nhật ký bot vẫn ghi đủ). Trả `None` thì đi tiếp như thường. Hook ném lỗi hoặc chạy quá 6 giây thì bị bỏ qua và model trả lời: một plugin hỏng không làm bot im. Hàm đồng bộ chạy trong thread riêng nên gọi HTTP chậm không chặn các kênh khác.
+
 ## Trang riêng và đường HTTP (từ 0.64.26)
 
 Plugin mở được đường web của riêng nó, dưới `/ext/<slug>/`. Dùng cho trang cài đặt, hoặc cho dịch vụ bên ngoài gọi vào (webhook, cửa OAuth). Gói "Javis trong ChatGPT" trong kho là ví dụ chạy thật.
