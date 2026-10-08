@@ -306,6 +306,16 @@ All three kinds of turn fire the hook: the live turn, the Inbox **Reply for me /
 
 A plugin using this hook sits behind the usual rails: a user-installed plugin only runs with `JAVIS_ENABLE_USER_PLUGINS=true`, a Package plugin goes through the installer, and it should declare `min_mode: readonly` when it only reads.
 
+## Hook `truoc_tra_loi`: answer for a dedicated bot, before the model
+
+For an app with its own sentence reader (say a log that understands "breakfast 35k"): the person's message must reach the app **verbatim** and **before** the model touches it. `pre_tool_call` cannot do that, because by then the model has already read and rewritten the message.
+
+| Event | When it fires | What it receives |
+|---|---|---|
+| `truoc_tra_loi` | On a dedicated bot, after the access gates (bot allowed in this chat, no human took over), before the model | `text` (verbatim), `turn`, `bot_id`, `bot_slug` |
+
+Return `{"reply": "text"}` and the bot sends exactly that and **does not call the model** (the inbox and the bot log are still written). Return `None` to carry on as usual. A hook that raises or runs longer than 6 seconds is skipped and the model answers: a broken plugin never silences the bot. Sync callbacks run in a thread, so a slow HTTP call does not block other channels.
+
 ## Own page and HTTP routes (since 0.64.26)
 
 A plugin can open web routes of its own, under `/ext/<slug>/`. Use it for a settings page, or for an outside service to call in (webhook, OAuth door). The "Javis in ChatGPT" package in the store is a working example.

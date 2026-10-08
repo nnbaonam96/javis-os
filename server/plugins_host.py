@@ -465,6 +465,10 @@ class PluginContext:
         **`chatbot_turn_context`**: fired once per chatbot turn, right before the engine runs. It
         receives `channel, account_id, bot_id, chat_type, chat_id, sender_id, vault_root, trial` and
         may return ONE short line for that turn's system prompt. See `chatbot_turn_context` below.
+
+        **`truoc_tra_loi`**: bắn ở bot chuyên trách TRƯỚC lượt model, nhận `text` nguyên văn +
+        `turn` + `bot_id` + `bot_slug`. Trả `{"reply": "câu"}` thì bot gửi câu đó và KHÔNG gọi
+        model; lỗi/quá giờ thì bỏ qua. Xem `fire_truoc_tra_loi`.
         """
         self._hooks.setdefault(str(event), []).append(callback)
 
@@ -1166,6 +1170,51 @@ async def chatbot_turn_context(vault_root: Optional[str], payload: dict,
             lines.append(line)
             used += len(line)
     return lines
+
+
+# ============================================================
+# Hook truoc_tra_loi - plugin trả lời THAY bot chuyên trách, trước lượt model
+# ============================================================
+# Sinh ra cho app có bộ đọc câu riêng (vd sổ ghi chép nhận "ăn sáng 35k"): tin của người nhắn phải
+# tới app NGUYÊN VĂN và TRƯỚC khi model chạm vào. Qua `pre_tool_call` thì không được: lúc đó model
+# đã đọc và chép lại câu, app không còn biết chữ nào là người ta gõ, chữ nào model thêm.
+#
+# Hợp đồng: callback(**kwargs) nhận `text`, `turn` (như pre_tool_call), `bot_id`, `bot_slug`.
+#   return {"reply": "câu"}  -> bot gửi đúng câu đó, KHÔNG gọi model
+#   return None / gì khác    -> đi tiếp như chưa có hook
+# Hook lỗi hoặc quá `TRUOC_TRA_LOI_TRAN_S` thì bị bỏ qua (fail-open: model trả lời như thường) -
+# một plugin hỏng không được làm bot im. Callback đồng bộ chạy trong thread, để một lời gọi HTTP
+# chậm của plugin không chặn vòng sự kiện của mọi kênh khác.
+TRUOC_TRA_LOI_TRAN_S = 6.0
+
+
+def has_reply_hooks(vault_root: Optional[str] = None) -> bool:
+    return bool(_load_all(vault_root)["hooks"].get("truoc_tra_loi"))
+
+
+async def _goi_co_tran(cb: Callable, payload: dict, tran: float):
+    if inspect.iscoroutinefunction(cb):
+        return await asyncio.wait_for(cb(**payload), tran)
+    return await asyncio.wait_for(asyncio.to_thread(cb, **payload), tran)
+
+
+async def fire_truoc_tra_loi(vault_root: Optional[str], payload: dict) -> Optional[str]:
+    """Hook ĐẦU TIÊN trả `{"reply": chuỗi không rỗng}` thắng. Không ai trả lời -> None."""
+    ent = _load_all(vault_root)
+    for cb in ent["hooks"].get("truoc_tra_loi", []):
+        try:
+            out = await _goi_co_tran(cb, dict(payload), TRUOC_TRA_LOI_TRAN_S)
+        except (asyncio.TimeoutError, TimeoutError):
+            print(f"[plugins] hook truoc_tra_loi quá {TRUOC_TRA_LOI_TRAN_S:g}s, bỏ qua", file=sys.stderr)
+            continue
+        except Exception as e:
+            print(f"[plugins] hook truoc_tra_loi lỗi: {type(e).__name__}: {e}", file=sys.stderr)
+            continue
+        if isinstance(out, dict):
+            dap = out.get("reply")
+            if isinstance(dap, str) and dap.strip():
+                return dap.strip()[:8000]
+    return None
 
 
 def fire_hook(event: str, vault_root: Optional[str] = None, **payload) -> None:

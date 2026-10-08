@@ -308,6 +308,16 @@ Ba loại lượt đều bắn hook: lượt thật, lượt **Trả lời giúp
 
 Plugin dùng hook này vẫn chịu đúng rào chung: plugin người dùng tự cài chỉ chạy khi đặt `JAVIS_ENABLE_USER_PLUGINS=true`, plugin của Gói đi qua trình cài, và nên khai `min_mode: readonly` nếu nó chỉ đọc.
 
+## Hook `truoc_tra_loi`: trả lời thay bot chuyên trách, trước lượt model
+
+Dành cho app có bộ đọc câu riêng (vd sổ ghi chép nhận "ăn sáng 35k"): tin của người nhắn phải tới app **nguyên văn** và **trước** khi model chạm vào. `pre_tool_call` không làm được việc này vì lúc đó model đã đọc và chép lại câu.
+
+| Sự kiện | Bắn khi nào | Nhận được gì |
+|---|---|---|
+| `truoc_tra_loi` | Ở bot chuyên trách, sau các chốt quyền (bot được phép ở cuộc chat, người thật chưa Tiếp quản), trước khi gọi model | `text` (nguyên văn), `turn`, `bot_id`, `bot_slug` |
+
+Trả `{"reply": "câu"}` thì bot gửi đúng câu đó và **không gọi model** (Hộp thư và nhật ký bot vẫn ghi đủ). Trả `None` thì đi tiếp như thường. Hook ném lỗi hoặc chạy quá 6 giây thì bị bỏ qua và model trả lời: một plugin hỏng không làm bot im. Hàm đồng bộ chạy trong thread riêng nên gọi HTTP chậm không chặn các kênh khác.
+
 ## Trang riêng và đường HTTP (từ 0.64.26)
 
 Plugin mở được đường web của riêng nó, dưới `/ext/<slug>/`. Dùng cho trang cài đặt, hoặc cho dịch vụ bên ngoài gọi vào (webhook, cửa OAuth). Gói "Javis trong ChatGPT" trong kho là ví dụ chạy thật.
