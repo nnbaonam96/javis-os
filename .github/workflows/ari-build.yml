@@ -1,0 +1,189 @@
+name: Ari - dựng image Javis có bản vá
+
+# Fork RIÊNG của Ari (nnbaonam96/javis-os), KHÔNG gửi gì về repo gốc blogminhquy/javis-os.
+#
+# Nhánh `ari-main` = bản gốc + vài commit vá riêng (Bống Hub: hook `truoc_tra_loi`, cờ
+# `zalo_cua_bot`) + chính file này. Mỗi 30 phút workflow:
+#   1. kéo `main` mới nhất của repo gốc,
+#   2. chồng lại các commit vá lên trên (git rebase, CHỈ trong máy chạy, không đẩy ngược),
+#   3. chạy test như CI của repo gốc,
+#   4. dựng image và đẩy lên ghcr.io/nnbaonam96/javis-os (:latest, :<VERSION>-ari, :src-...).
+# VPS Hostinger kéo `:latest` đó, nên nút "Cập nhật ngay" trong app (Watchtower) chạy lại được.
+#
+# AN TOÀN: bước 2 hoặc 3 hỏng (bản gốc đổi đúng chỗ vá, hoặc test đỏ) thì workflow ĐỎ và
+# KHÔNG đẩy image nào. VPS vẫn chạy bản cũ đang ổn; GitHub gửi mail báo run đỏ. Khi đó mở một
+# phiên Claude ở D:\PROJECTS\_LAB\javis-os-bong để gỡ xung đột trên nhánh `ari-main`.
+#
+# Bản vá nào đã được repo gốc nhận thì rebase tự bỏ commit đó (nội dung trùng). Nếu repo gốc
+# nhận ở dạng đã sửa khác đi, rebase báo xung đột, gỡ tay một lần bằng `git rebase --skip`.
+
+on:
+  schedule:
+    - cron: "*/30 * * * *"
+  push:
+    branches: [ari-main]
+  workflow_dispatch:
+    inputs:
+      force:
+        description: "Dựng lại dù không có gì mới"
+        type: boolean
+        default: false
+
+concurrency:
+  group: ari-build
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  packages: write
+
+env:
+  UPSTREAM: https://github.com/blogminhquy/javis-os.git
+  IMAGE: ghcr.io/nnbaonam96/javis-os
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ari-main
+          fetch-depth: 0
+
+      - name: Chồng bản vá lên main mới nhất của repo gốc
+        id: src
+        shell: bash
+        run: |
+          git config user.name "ari-build"
+          git config user.email "ari-build@users.noreply.github.com"
+          git fetch --no-tags "$UPSTREAM" main:refs/remotes/upstream/main
+          up=$(git rev-parse --short=8 upstream/main)
+          ari=$(git rev-parse --short=8 HEAD)
+          if ! git rebase upstream/main; then
+            git rebase --abort || true
+            echo "::error::Bản vá không chồng được lên repo gốc $up (xung đột). KHÔNG dựng image, VPS giữ bản cũ."
+            { echo "### ĐỎ: bản vá xung đột với repo gốc \`$up\`"
+              echo "VPS vẫn chạy bản cũ. Mở phiên Claude ở \`javis-os-bong\` để rebase tay nhánh \`ari-main\`."; } >> "$GITHUB_STEP_SUMMARY"
+            exit 1
+          fi
+          version=$(tr -d ' \n\r' < VERSION)
+          echo "up=$up" >> "$GITHUB_OUTPUT"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "tag=src-$up-$ari" >> "$GITHUB_OUTPUT"
+          {
+            echo "### Nguồn"
+            echo "- Repo gốc: \`$up\` (v$version)"
+            echo "- Commit vá chồng lên:"
+            git log --format='  - `%h` %s' upstream/main..HEAD
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      # Nguồn này đã đỏ ở run trước thì thôi, khỏi đỏ lại (và gửi mail) mỗi 30 phút.
+      - name: Nguồn này từng đỏ chưa
+        id: failed
+        uses: actions/cache/restore@v4
+        with:
+          path: .ari-fail
+          key: ari-fail-${{ steps.src.outputs.tag }}
+
+      - name: Login to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # Cùng nguồn (gốc + vá) đã dựng rồi thì thôi: run 30 phút một lần phần lớn dừng ở đây.
+      - name: Đã có image cho nguồn này chưa
+        id: have
+        shell: bash
+        run: |
+          if [ "${{ inputs.force }}" != "true" ] && \
+             docker buildx imagetools inspect "$IMAGE:${{ steps.src.outputs.tag }}" >/dev/null 2>&1; then
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            echo "Không có gì mới (đã có \`${{ steps.src.outputs.tag }}\`)." >> "$GITHUB_STEP_SUMMARY"
+          elif [ "${{ inputs.force }}" != "true" ] && [ "${{ steps.failed.outputs.cache-hit }}" = "true" ]; then
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            echo "Nguồn \`${{ steps.src.outputs.tag }}\` đã ĐỎ ở run trước, không thử lại. VPS giữ bản cũ." >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - uses: actions/setup-python@v5
+        if: steps.have.outputs.skip != 'true'
+        with:
+          python-version: "3.12"
+
+      - uses: actions/setup-node@v4
+        if: steps.have.outputs.skip != 'true'
+        with:
+          node-version: "22"
+
+      - name: Test (như CI repo gốc)
+        if: steps.have.outputs.skip != 'true'
+        shell: bash
+        env:
+          PYTHONIOENCODING: utf-8
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt pytest
+          python -m compileall -q server system/plugins
+          (cd server && python -c "import main; print(f'nap main ok, {len(main.app.routes)} route')")
+          status=0; dsdo=""
+          for f in tests/python/test_*.py; do
+            echo "==== $(basename "$f") ===="
+            python "$f" || { status=1; dsdo="$dsdo $(basename "$f")"; }
+          done
+          for f in tests/js/test_*.js tests/js/test_*.mjs; do
+            [ -f "$f" ] || continue
+            echo "==== $(basename "$f") ===="
+            node "$f" || { status=1; dsdo="$dsdo $(basename "$f")"; }
+          done
+          if [ -n "$dsdo" ]; then
+            { echo "### ĐỎ: test hỏng, KHÔNG dựng image"; for t in $dsdo; do echo "- \`$t\`"; done; } >> "$GITHUB_STEP_SUMMARY"
+          fi
+          exit $status
+
+      - name: Phiên bản Codex CLI / Claude Code
+        if: steps.have.outputs.skip != 'true'
+        shell: bash
+        run: |
+          echo "CODEX_CLI_VERSION=$(npm view @openai/codex@latest version)" >> "$GITHUB_ENV"
+          echo "CLAUDE_CLI_VERSION=$(npm view @anthropic-ai/claude-code@latest version)" >> "$GITHUB_ENV"
+
+      - uses: docker/setup-buildx-action@v3
+        if: steps.have.outputs.skip != 'true'
+
+      - name: Dựng & đẩy image
+        if: steps.have.outputs.skip != 'true'
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: true
+          build-args: |
+            CODEX_CLI_VERSION=${{ env.CODEX_CLI_VERSION }}
+            CLAUDE_CLI_VERSION=${{ env.CLAUDE_CLI_VERSION }}
+          labels: |
+            org.opencontainers.image.source=https://github.com/nnbaonam96/javis-os
+          tags: |
+            ${{ env.IMAGE }}:latest
+            ${{ env.IMAGE }}:${{ steps.src.outputs.version }}-ari
+            ${{ env.IMAGE }}:${{ steps.src.outputs.tag }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Ghi nhớ nguồn này đã đỏ
+        if: failure() && steps.src.outputs.tag != ''
+        run: echo "${{ steps.src.outputs.tag }}" > .ari-fail
+
+      - name: Lưu dấu đỏ
+        if: failure() && steps.src.outputs.tag != ''
+        uses: actions/cache/save@v4
+        with:
+          path: .ari-fail
+          key: ari-fail-${{ steps.src.outputs.tag }}
+
+      - name: Tóm tắt
+        if: steps.have.outputs.skip != 'true'
+        run: |
+          echo "### Đã đẩy \`$IMAGE:latest\` = v${{ steps.src.outputs.version }} + bản vá Ari" >> "$GITHUB_STEP_SUMMARY"
+          echo "Quay lại bản cũ: đổi image trên Hostinger thành \`$IMAGE:<phiên bản>-ari\` rồi Triển khai." >> "$GITHUB_STEP_SUMMARY"
