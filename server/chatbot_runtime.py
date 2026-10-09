@@ -208,6 +208,12 @@ hoặc lời nhờ giúp mà tài liệu ở trên trả lời được. Nếu l
 """
 
 
+def _zalo_cua_bot(meta) -> bool:
+    """Frontmatter Agent `zalo_cua_bot: true` (chấp nhận true/"true"/"yes"/"có"). Thiếu = False, hành vi cũ."""
+    v = (meta or {}).get("zalo_cua_bot") if isinstance(meta, dict) else None
+    return v is True or str(v or "").strip().lower() in ("true", "yes", "có", "co", "1")
+
+
 def build_bot_prompt(bot: dict) -> str:
     """System prompt của một lượt bot = ĐÚNG file Agent, cộng tài liệu đã tra sẵn.
 
@@ -269,7 +275,10 @@ def build_bot_prompt(bot: dict) -> str:
         phan.append(_TU_MO_TAI_LIEU.format(
             chat=_TU_MO_CHAT if bot.get("nguon_tra_loi") == "tai_lieu" else ""))
     # Kênh của LƯỢT này, do _make_answer_fn gắn vào. Chỉ Zalo cá nhân mới có thêm đoạn này.
-    if (bot or {}).get("_kenh_luot") == "zalo_personal":
+    # Trừ khi Agent khai `zalo_cua_bot: true`: tài khoản Zalo là của CHÍNH trợ lý (một số riêng cho bot),
+    # không phải Zalo riêng của chủ - câu gửi đi không mang tên chủ, ai nhắn vào cũng đang nói với bot.
+    # Đoạn "chuyện riêng / không chắc thì im" khi đó làm bot im cả với câu tán gẫu bình thường.
+    if (bot or {}).get("_kenh_luot") == "zalo_personal" and not _zalo_cua_bot(meta):
         phan.append(_CAU_ZALO_CA_NHAN)
     # The channel of THIS turn sends files (0.84.3): tell the Agent how to send an image, or it never knows it can.
     if bot_images.channel_sends_files((bot or {}).get("_kenh_luot")):
