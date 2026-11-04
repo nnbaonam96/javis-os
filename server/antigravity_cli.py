@@ -35,8 +35,10 @@ import errno
 import json
 import os
 import re
+import shutil
 import subprocess
 import sys
+import tempfile
 import threading
 import time
 import uuid
@@ -1184,6 +1186,135 @@ def trang_thai_mcp(vault_root=None) -> dict:
 
 
 # ---------------------------------------------------------------------------
+# Danh tính của lượt: mỗi tiến trình `agy` một HOME riêng
+# ---------------------------------------------------------------------------
+# Hook của plugin chỉ biết AI đang nhắn khi engine gửi mã lượt (`turn_context.HEADER`) lên hub.
+# Claude và Codex truyền mã theo từng tiến trình. `agy` 1.5.0 thì không có đường nào như vậy, đã
+# đo trên bản thật: không có cờ `--mcp-config`, `--settings` từ chối khoá `mcpServers`, và
+# `${BIEN}` trong header của mcp_config bị gửi nguyên văn.
+#
+# KHÔNG ghi mã lượt vào mcp_config HOME: file đó dùng chung, nên lượt Zalo của nhân viên chạy cùng
+# lúc với lượt dashboard có thể đọc nhầm mã của chủ và gọi công cụ bằng quyền của chủ.
+#
+# Đường đo được là cấp HOME riêng: một thư mục toàn symlink trỏ về HOME thật (đăng nhập, lịch sử
+# hội thoại vẫn dùng chung), trừ mcp_config.json là file thật mang mã của ĐÚNG lượt này. Lượt không
+# có danh tính thì chạy HOME thật như cũ, và plugin vẫn đọc là "không có ai".
+_HOME_LUOT_TTL_S = 24 * 3600
+
+
+def _goc_home_luot() -> Path:
+    return Path(os.environ.get("JAVIS_STATE_DIR") or Path(__file__).parent) / ".agy_luot"
+
+
+def _cau_hinh_mcp_luot(key: str, mcp_rieng: Optional[str] = None) -> Optional[dict]:
+    """mcp_config của một lượt: bản HOME + mã lượt. None khi hub tắt (không có entry `javis`)."""
+    cu: dict = {}
+    for p in _duong_mcp_home():
+        try:
+            d = json.loads(p.read_text(encoding="utf-8"))
+        except Exception:
+            continue
+        if isinstance(d, dict):
+            cu = d
+            break
+    servers = cu.get("mcpServers")
+    hub = servers.get("javis") if isinstance(servers, dict) else None
+    if not isinstance(hub, dict):
+        return None
+    # File HOME có thể vừa bị lượt của brain khác ghi đè, file per-brain mới mang đúng X-Javis-Vault.
+    if mcp_rieng:
+        try:
+            rieng = json.loads(Path(mcp_rieng).read_text(encoding="utf-8"))["mcpServers"]["javis"]
+            if isinstance(rieng, dict):
+                hub = rieng
+        except Exception:
+            pass
+    import turn_context
+    hub = {**hub, "headers": {**(hub.get("headers") or {}), turn_context.HEADER: key}}
+    return {**cu, "mcpServers": {**servers, "javis": hub}}
+
+
+def _noi_symlink(goc: Path, dich: Path, tru: frozenset = frozenset()) -> None:
+    dich.mkdir(parents=True, exist_ok=True)
+    if goc.is_dir():
+        for con in goc.iterdir():
+            if con.name not in tru:
+                os.symlink(con, dich / con.name)
+
+
+def _don_home_cu(goc: Path) -> None:
+    """Lưới an toàn cho lượt bị giết trước khi kịp dọn."""
+    try:
+        cu = [d for d in goc.iterdir() if d.stat().st_mtime < time.time() - _HOME_LUOT_TTL_S]
+    except OSError:
+        return
+    for d in cu:
+        shutil.rmtree(d, ignore_errors=True)
+
+
+def tao_home_luot(mcp_rieng: Optional[str] = None) -> Optional[str]:
+    """HOME riêng mang mã của lượt hiện tại, hoặc None để chạy HOME thật như cũ.
+
+    Lỗi giữa chừng cũng về None: `agy` vẫn trả lời được, chỉ là plugin cần danh tính sẽ từ chối.
+    Sai về phía an toàn, không bao giờ thành "coi như chủ".
+    """
+    if os.name == "nt":      # tạo symlink trên Windows cần quyền riêng
+        return None
+    home = None
+    try:
+        import turn_context
+        key = turn_context.issue_key()
+        cau_hinh = _cau_hinh_mcp_luot(key, mcp_rieng) if key else None
+        if not cau_hinh:
+            return None
+        goc = _goc_home_luot()
+        goc.mkdir(parents=True, exist_ok=True)
+        _don_home_cu(goc)
+        home = Path(tempfile.mkdtemp(prefix="luot-", dir=goc))   # 700: bên trong có hub token
+        that = _home_dir()
+        _noi_symlink(that, home, frozenset({".gemini"}))
+        _noi_symlink(that / ".gemini", home / ".gemini", frozenset({"config", "antigravity-cli"}))
+        for ten in ("config", "antigravity-cli"):
+            _noi_symlink(that / ".gemini" / ten, home / ".gemini" / ten, frozenset({"mcp_config.json"}))
+        f = home / ".gemini" / "config" / "mcp_config.json"
+        f.write_text(json.dumps(cau_hinh, ensure_ascii=False), encoding="utf-8")
+        os.chmod(f, 0o600)
+        return str(home)
+    except Exception as e:
+        print(f"[antigravity] không tạo được HOME của lượt: {type(e).__name__}: {e}", file=sys.stderr)
+        if home:
+            shutil.rmtree(home, ignore_errors=True)
+        return None
+
+
+def don_home_luot(home: Optional[str]) -> None:
+    """Xoá HOME của lượt. File `agy` ghi đè bằng rename (token vừa làm mới) đã thay chỗ symlink nên
+    nằm lại trong đây: chép về HOME thật trước khi xoá. `rmtree` chỉ gỡ symlink, không đụng đích."""
+    if not home:
+        return
+    try:
+        that = _home_dir() / ".gemini"
+        for ten in ("config", "antigravity-cli"):
+            thu_muc = Path(home) / ".gemini" / ten
+            if not thu_muc.is_dir():
+                continue
+            for con in thu_muc.iterdir():
+                if con.is_symlink() or con.name == "mcp_config.json":
+                    continue
+                dich = that / ten / con.name
+                if con.is_dir():
+                    if not dich.exists():
+                        shutil.move(str(con), str(dich))
+                    continue
+                tam = dich.with_name(dich.name + f".{uuid.uuid4().hex[:8]}.tmp")
+                shutil.copy2(con, tam)
+                os.replace(tam, dich)
+    except Exception as e:
+        print(f"[antigravity] không chép lại được file của lượt: {type(e).__name__}: {e}", file=sys.stderr)
+    shutil.rmtree(home, ignore_errors=True)
+
+
+# ---------------------------------------------------------------------------
 # Một lượt chạy
 # ---------------------------------------------------------------------------
 class AntigravityCLI:
@@ -1462,6 +1593,9 @@ class AntigravityCLI:
         args = self._build_args(None if qua_stdin else prompt_argv,
                                 noi_mach=(duong != "file"), them=them_args,
                                 ct_stdin=duong.partition(":")[2])
+        # Lấy mã ở ĐÂY, trong ngữ cảnh của lượt: luồng đọc bên dưới không mang theo ContextVar.
+        home_luot = tao_home_luot(self.mcp_config)
+        env_luot = {**os.environ, "HOME": home_luot} if home_luot else None
         loop = asyncio.get_running_loop()
         hang: asyncio.Queue = asyncio.Queue()
         HET = object()
@@ -1472,7 +1606,7 @@ class AntigravityCLI:
                 proc = subprocess.Popen(
                     args, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                     cwd=self.cwd, text=True, encoding="utf-8", errors="replace", bufsize=1,
-                    creationflags=_no_window(), start_new_session=(os.name != "nt"),
+                    creationflags=_no_window(), start_new_session=(os.name != "nt"), env=env_luot,
                 )
                 try:   # lệnh chạy ngầm agy bỏ lại sẽ được theo dõi sau lượt (tien_trinh_nen)
                     import tien_trinh_nen
@@ -1545,6 +1679,7 @@ class AntigravityCLI:
                 # Dọn file ngữ cảnh ở ĐÂY chứ không ở vòng đọc sự kiện: luồng này luôn chạy hết,
                 # kể cả khi người dùng đóng tab giữa chừng và không ai đọc nốt hàng đợi nữa.
                 # Để sót là rác tích dần trong brain của người dùng.
+                don_home_luot(home_luot)
                 if tep_ngu_canh and not os.environ.get("JAVIS_AGY_GIU_NGU_CANH"):
                     try:
                         os.unlink(tep_ngu_canh)
