@@ -40,6 +40,8 @@ server/.hub_token
 server/.setup_token
 # Token API của CLI: file chứa bản BĂM + tên token, vẫn là bí mật vận hành, không vào repo.
 server/.api_tokens.json
+# Dấu xác thực của settings.json (config._auth_stamp_path): bí mật vận hành, secret_guard đã chặn, không vào repo.
+server/.auth_stamp.json
 server/auth_audit.jsonl*
 # Account security state (2026-11-09): sign-in metadata, the account-block fingerprint that spots an outside edit of
 # settings.json, the security log and the networks seen at sign-in. secret_guard.py refuses the AI these same names.
