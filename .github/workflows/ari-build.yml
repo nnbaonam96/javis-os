@@ -128,16 +128,18 @@ jobs:
           pip install -r requirements.txt pytest
           python -m compileall -q server system/plugins
           (cd server && python -c "import main; print(f'nap main ok, {len(main.app.routes)} route')")
+          # Chạy SONG SONG (1.443 file lần lượt mất ~70 phút). File đỏ ở lượt song song được chạy lại
+          # MỘT MÌNH: chỉ đỏ thật khi chạy riêng vẫn đỏ, để test giẫm chân nhau không chặn image.
+          chay() { f="$1"; log="$(mktemp)"; case "$f" in *.py) python "$f" >"$log" 2>&1;; *) node "$f" >"$log" 2>&1;; esac
+                   rc=$?; { echo "==== $(basename "$f") ===="; cat "$log"; } ; rm -f "$log"; [ $rc -eq 0 ] || echo "$f" >> "$RUNNER_TEMP/do-ss.txt"; }
+          export -f chay; : > "$RUNNER_TEMP/do-ss.txt"
+          ls tests/python/test_*.py tests/js/test_*.js tests/js/test_*.mjs 2>/dev/null | xargs -P 6 -I{} bash -c 'chay "$@"' _ {}
           status=0; dsdo=""
-          for f in tests/python/test_*.py; do
-            echo "==== $(basename "$f") ===="
-            python "$f" || { status=1; dsdo="$dsdo $(basename "$f")"; }
-          done
-          for f in tests/js/test_*.js tests/js/test_*.mjs; do
-            [ -f "$f" ] || continue
-            echo "==== $(basename "$f") ===="
-            node "$f" || { status=1; dsdo="$dsdo $(basename "$f")"; }
-          done
+          while read -r f; do
+            [ -n "$f" ] || continue
+            echo "==== CHẠY LẠI MỘT MÌNH: $(basename "$f") ===="
+            case "$f" in *.py) python "$f";; *) node "$f";; esac || { status=1; dsdo="$dsdo $(basename "$f")"; }
+          done < "$RUNNER_TEMP/do-ss.txt"
           if [ -n "$dsdo" ]; then
             { echo "### ĐỎ: test hỏng, KHÔNG dựng image"; for t in $dsdo; do echo "- \`$t\`"; done; } >> "$GITHUB_STEP_SUMMARY"
           fi
