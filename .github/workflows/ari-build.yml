@@ -210,7 +210,8 @@ jobs:
 
           <!-- up:${UP:-none} -->"
           gh label create ari-build-do -R "$GITHUB_REPOSITORY" --color D93F0B --description "Build image Ari đỏ" >/dev/null 2>&1 || true
-          num=$(gh issue list -R "$GITHUB_REPOSITORY" --state open --label ari-build-do --json number --jq '.[0].number // empty')
+          # REST, không dùng `gh issue list` (đi qua chỉ mục tìm kiếm, trễ vài giây -> mở trùng issue).
+          num=$(gh api "repos/$GITHUB_REPOSITORY/issues?labels=ari-build-do&state=open&per_page=1" --jq '.[0].number // empty')
           if [ -z "$num" ]; then
             gh issue create -R "$GITHUB_REPOSITORY" --label ari-build-do --title "Build Ari đỏ: VPS đang giữ bản cũ" --body "$body"
           elif ! gh issue view "$num" -R "$GITHUB_REPOSITORY" --json body,comments --jq '[.body]+[.comments[].body]|join(" ")' | grep -qF "<!-- up:${UP:-none} -->"; then
@@ -222,7 +223,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          for n in $(gh issue list -R "$GITHUB_REPOSITORY" --state open --label ari-build-do --json number --jq '.[].number'); do
+          for n in $(gh api "repos/$GITHUB_REPOSITORY/issues?labels=ari-build-do&state=open" --jq '.[].number'); do
             gh issue close "$n" -R "$GITHUB_REPOSITORY" --comment "Xanh lại: đã đẩy v${{ steps.src.outputs.version }} + bản vá Ari. Watchtower trên VPS tự kéo trong vòng 24h, hoặc bấm Cập nhật ngay trong app."
           done
 
