@@ -11,15 +11,16 @@ name: Ari - dựng image Javis có bản vá
 # VPS Hostinger kéo `:latest` đó, nên nút "Cập nhật ngay" trong app (Watchtower) chạy lại được.
 #
 # AN TOÀN: bước 2 hoặc 3 hỏng (bản gốc đổi đúng chỗ vá, hoặc test đỏ) thì workflow ĐỎ và
-# KHÔNG đẩy image nào. VPS vẫn chạy bản cũ đang ổn; GitHub gửi mail báo run đỏ. Khi đó mở một
+# KHÔNG đẩy image nào. VPS vẫn chạy bản cũ đang ổn; workflow mở issue `ari-build-do` tag chủ. Khi đó mở một
 # phiên Claude ở D:\PROJECTS\_LAB\javis-os-bong để gỡ xung đột trên nhánh `ari-main`.
 #
 # Bản vá nào đã được repo gốc nhận thì rebase tự bỏ commit đó (nội dung trùng). Nếu repo gốc
 # nhận ở dạng đã sửa khác đi, rebase báo xung đột, gỡ tay một lần bằng `git rebase --skip`.
 
+# Lịch 30 phút do cron trên VPS gọi (/usr/local/bin/ari-build-dispatch, phút 7 và 37): lịch
+# `schedule` của GitHub trên fork chạy thất thường và bị tắt khi repo im 60 ngày. Để cả hai thì
+# mỗi giờ kích hoạt trùng 4 lần, nên bỏ `schedule` (09/11/2026).
 on:
-  schedule:
-    - cron: "*/30 * * * *"
   push:
     branches: [ari-main]
   workflow_dispatch:
@@ -36,6 +37,7 @@ concurrency:
 permissions:
   contents: read
   packages: write
+  issues: write
 
 env:
   UPSTREAM: https://github.com/blogminhquy/javis-os.git
@@ -59,6 +61,7 @@ jobs:
           git fetch --no-tags "$UPSTREAM" main:refs/remotes/upstream/main
           up=$(git rev-parse --short=8 upstream/main)
           ari=$(git rev-parse --short=8 HEAD)
+          echo "up=$up" >> "$GITHUB_OUTPUT"
           if ! git rebase upstream/main; then
             git rebase --abort || true
             echo "::error::Bản vá không chồng được lên repo gốc $up (xung đột). KHÔNG dựng image, VPS giữ bản cũ."
@@ -67,7 +70,6 @@ jobs:
             exit 1
           fi
           version=$(tr -d ' \n\r' < VERSION)
-          echo "up=$up" >> "$GITHUB_OUTPUT"
           echo "version=$version" >> "$GITHUB_OUTPUT"
           echo "tag=src-$up-$ari" >> "$GITHUB_OUTPUT"
           {
@@ -184,6 +186,45 @@ jobs:
         with:
           path: .ari-fail
           key: ari-fail-${{ steps.src.outputs.tag }}
+
+      - name: Báo đỏ cho chủ (một issue, không spam)
+        if: failure()
+        env:
+          GH_TOKEN: ${{ github.token }}
+          UP: ${{ steps.src.outputs.up }}
+          SRC_OK: ${{ steps.src.outcome }}
+        run: |
+          # Đỏ 2 ngày không ai biết (07-09/11/2026): mail "run failed" mỗi 30 phút bị chìm. Giờ mở MỘT
+          # issue có @nnbaonam96, mỗi bản gốc mới chỉ comment thêm một lần, xanh lại thì tự đóng.
+          run_url="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
+          if [ "$SRC_OK" = "failure" ]; then
+            ly_do="Bản vá Ari **xung đột** với bản gốc \`${UP:-?}\` (git rebase dừng)."
+          else
+            ly_do="Bản vá chồng được lên bản gốc \`${UP:-?}\` nhưng **test đỏ** hoặc bước dựng image hỏng."
+          fi
+          body="@nnbaonam96 Build image Ari ĐỎ, VPS vẫn chạy bản cũ (an toàn, chỉ là chưa lên bản mới).
+
+          - Lý do: $ly_do
+          - Run: $run_url
+          - Cách xử lý: mở phiên Claude ở \`D:\PROJECTS\_LAB\javis-os-bong\`, nói \"build Ari đỏ, xem issue này và sửa\". Runbook: \`D:\PROJECTS\_LAB\javis-os-ari\RUNBOOK-build-do.md\`.
+
+          <!-- up:${UP:-none} -->"
+          gh label create ari-build-do -R "$GITHUB_REPOSITORY" --color D93F0B --description "Build image Ari đỏ" >/dev/null 2>&1 || true
+          num=$(gh issue list -R "$GITHUB_REPOSITORY" --state open --label ari-build-do --json number --jq '.[0].number // empty')
+          if [ -z "$num" ]; then
+            gh issue create -R "$GITHUB_REPOSITORY" --label ari-build-do --title "Build Ari đỏ: VPS đang giữ bản cũ" --body "$body"
+          elif ! gh issue view "$num" -R "$GITHUB_REPOSITORY" --json body,comments --jq '[.body]+[.comments[].body]|join(" ")' | grep -qF "<!-- up:${UP:-none} -->"; then
+            gh issue comment "$num" -R "$GITHUB_REPOSITORY" --body "$body"
+          fi
+
+      - name: Xanh lại thì đóng báo đỏ
+        if: success() && steps.have.outputs.skip != 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          for n in $(gh issue list -R "$GITHUB_REPOSITORY" --state open --label ari-build-do --json number --jq '.[].number'); do
+            gh issue close "$n" -R "$GITHUB_REPOSITORY" --comment "Xanh lại: đã đẩy v${{ steps.src.outputs.version }} + bản vá Ari. Watchtower trên VPS tự kéo trong vòng 24h, hoặc bấm Cập nhật ngay trong app."
+          done
 
       - name: Tóm tắt
         if: steps.have.outputs.skip != 'true'
