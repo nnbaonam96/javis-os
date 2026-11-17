@@ -112,3 +112,6 @@ desktop.ini
 # Desktop installers (packaging/) are built on Windows/macOS runners, never inside the image.
 packaging/
 dist/
+
+# Keep turn ledger runtime data out of Docker build contexts.
+server/turn_ledger.sqlite3*

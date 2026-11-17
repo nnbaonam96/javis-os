@@ -226,3 +226,6 @@ server/client_errors.tmp
 # Desktop installers built by packaging/ (CI publishes them on the "desktop" release)
 /dist/
 packaging/windows/Vietnamese.isl
+
+# Turn ledger is runtime state, including SQLite WAL/SHM files.
+server/turn_ledger.sqlite3*
