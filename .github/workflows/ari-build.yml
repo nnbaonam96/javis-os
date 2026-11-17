@@ -129,19 +129,25 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt pytest
           python -m compileall -q server system/plugins
-          (cd server && python -c "import main; print(f'nap main ok, {len(main.app.routes)} route')")
+          # Fail early on missing ignore rules; do not race this repository-wide check with writers.
+          python tests/python/test_ignore_files.py
+          smoke_state=$(mktemp -d)
+          (cd server && JAVIS_STATE_DIR="$smoke_state" python -c "import main; print(f'nap main ok, {len(main.app.routes)} route')")
           # Chạy SONG SONG (1.443 file lần lượt mất ~70 phút). File đỏ ở lượt song song được chạy lại
           # MỘT MÌNH: chỉ đỏ thật khi chạy riêng vẫn đỏ, để test giẫm chân nhau không chặn image.
           chay() { f="$1"; log="$(mktemp)"; case "$f" in *.py) python "$f" >"$log" 2>&1;; *) node "$f" >"$log" 2>&1;; esac
                    rc=$?; { echo "==== $(basename "$f") ===="; cat "$log"; } ; rm -f "$log"; [ $rc -eq 0 ] || echo "$f" >> "$RUNNER_TEMP/do-ss.txt"; }
           export -f chay; : > "$RUNNER_TEMP/do-ss.txt"
-          ls tests/python/test_*.py tests/js/test_*.js tests/js/test_*.mjs 2>/dev/null | xargs -P 6 -I{} bash -c 'chay "$@"' _ {}
+          ls tests/python/test_*.py tests/js/test_*.js tests/js/test_*.mjs 2>/dev/null | \
+            grep -v '^tests/python/test_ignore_files.py$' | xargs -P 6 -I{} bash -c 'chay "$@"' _ {}
           status=0; dsdo=""
           while read -r f; do
             [ -n "$f" ] || continue
             echo "==== CHẠY LẠI MỘT MÌNH: $(basename "$f") ===="
             case "$f" in *.py) python "$f";; *) node "$f";; esac || { status=1; dsdo="$dsdo $(basename "$f")"; }
           done < "$RUNNER_TEMP/do-ss.txt"
+          # Check artifacts only after all parallel tests and retries have stopped writing.
+          python tests/python/test_ignore_files.py || { status=1; dsdo="$dsdo test_ignore_files.py"; }
           if [ -n "$dsdo" ]; then
             { echo "### ĐỎ: test hỏng, KHÔNG dựng image"; for t in $dsdo; do echo "- \`$t\`"; done; } >> "$GITHUB_STEP_SUMMARY"
           fi

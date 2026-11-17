@@ -108,3 +108,5 @@ dist/
 
 # Keep turn ledger runtime data out of Docker build contexts.
 server/turn_ledger.sqlite3*
+# Match future runtime stores and their WAL/SHM sidecars too.
+server/*.sqlite3*

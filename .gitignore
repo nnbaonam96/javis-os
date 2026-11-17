@@ -220,3 +220,5 @@ packaging/windows/Vietnamese.isl
 
 # Turn ledger is runtime state, including SQLite WAL/SHM files.
 server/turn_ledger.sqlite3*
+# Runtime SQLite stores live directly under server/, never source or fixtures.
+/server/*.sqlite3*
