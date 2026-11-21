@@ -628,7 +628,7 @@ Content-Type: application/json
 
 | Mã | Khi nào |
 |---|---|
-| `200` | `{"ok": true, "reply": "...", "silent": false, "turn_id": "turn_..."}`. `silent: true` khi bot chọn im |
+| `200` | `{"ok": true, "reply": "...", "silent": false, "turn_id": "turn_..."}`. `silent: true` khi bot chọn im. Một số lượt có thể có thêm `grounding: {"kind":"verified-v1","used_source_ids":[...]}` khi backend tự dựng câu trả lời từ tài liệu đã kiểm chứng; trường này vắng mặt nếu không có căn cứ xác minh. |
 | `400` | Thân request sai, `field` nói trường nào |
 | `401` | Khoá sai hoặc đã xoay |
 | `403` | Nguồn gọi không được phép, bot đang tắt, hoặc bot vượt trần mức quyền (`code` nói rõ) |
@@ -662,6 +662,8 @@ Bot gắn kênh API **chỉ chạy ở Chỉ đọc hoặc Đọc tài liệu**.
 Tài liệu khớp **bất kỳ** scope nào trong danh sách thì lượt đó thấy. Tài liệu của scope khác không lộ ra, kể cả tên file. Không gửi `scopes` thì lượt đó không thấy tài liệu riêng nào. Một tài liệu ghi `chat_scope: cs-hn` (không có `api:`) hay nằm trong `rieng-theo-nhom/cs-hn/` thì kênh API **không** thấy: đó là chỗ của các kênh khác.
 
 `conversation_id` **không bao giờ là scope**. Scope có dấu `:` (như `vai:nhan-vien`) thì dùng dòng `chat_scope: api:vai:nhan-vien`, vì Windows không cho tên thư mục có dấu `:`.
+
+`grounding` là metadata do backend tạo, không phải trích dẫn do model viết. `used_source_ids` chỉ liệt kê nguồn khi backend đã dựng câu trả lời từ nội dung nguồn hoặc xác minh được câu trả lời theo bằng chứng của chính lượt đó. Tên file, nội dung được đưa vào prompt hay kết quả tìm kiếm đơn thuần không đủ căn cứ. Request trùng (`409`) giữ nguyên metadata grounding của phản hồi gốc.
 
 ### `context` là dữ liệu, không phải lệnh
 
