@@ -19,11 +19,13 @@ Javis generated, and shows the reply. The bot must keep every fence of a Chatbot
 """
 from _paths import ROOT, SERVER  # noqa: E402,F401
 import asyncio
+from datetime import datetime
 import json
 import os
 import sys
 import tempfile
 from pathlib import Path
+from unittest.mock import patch
 
 _STATE = tempfile.mkdtemp(prefix="javis-chatbot-api-")
 os.environ["JAVIS_STATE_DIR"] = _STATE
@@ -101,7 +103,19 @@ async def _engine(text, meta, progress, *, channel="", bot=None, **_kw):
 # 2026-11-09: a bot reads the documents listed on its Agent. This Agent lists the shared doc and every file scoped by
 # frontmatter outside `rieng-theo-nhom/`, so the scope rules below are what keeps each one private.
 AGENT_FILES = ["huong-dan/concept-khu-vuon.md", "quy-trinh/noi-bo.md", "luong/quan-ly.md", "khach/ho-so-mgr.md",
-               "khach/vai-tran.md"]
+               "khach/vai-tran.md", "rieng-theo-nhom/api-ari-house/thong-tin-ari-co-ban.md",
+               "rieng-theo-nhom/api-ari-house/su-kien-uu-dai.md"]
+ARI_POLICY = ("---\nchat_scope: api:ari-house\n---\n# Chính sách tóm tắt\n"
+              "- Đổi / hoàn: tiếp nhận trong **3 ngày** từ ngày mua hoặc nhận hàng. "
+              "Sản phẩm chưa sử dụng, còn tag; mỗi đơn đổi tối đa 1 lần. "
+              "Đơn mua trực tiếp tại cửa hàng và đơn ưu đãi từ 30% trở lên không áp dụng đổi trả.\n")
+ARI_EVENTS = ("---\nchat_scope: api:ari-house\n---\n# Black Friday\n"
+              "Chương trình Black Friday diễn ra từ thứ Năm 26/11/2026 đến hết 30/11/2026.\n"
+              "## Online\n- Sale up to 70%.\n- Voucher website các mệnh giá 10K, 20K, 30K, 50K, 100K.\n"
+              "- Freeship cho đơn từ 900K.\n## Tại cửa hàng\n- Sale up to 60%.\n"
+              "- Vòng xoay Extra Deal có 6 deal.\n- Sample sale đồng giá từ 99K.\n")
+w("rieng-theo-nhom/api-ari-house/thong-tin-ari-co-ban.md", ARI_POLICY)
+w("rieng-theo-nhom/api-ari-house/su-kien-uu-dai.md", ARI_EVENTS)
 chatbot_runtime.wire(answer=_engine, brain_root=lambda b: str(BRAIN),
                      read_agent=lambda br, slug: ({"name": "Trợ lý", "role": "Nội bộ", "assets": {
                          "files": [{"id": str(i), "path": f} for i, f in enumerate(AGENT_FILES)]}},
@@ -150,7 +164,7 @@ check("out-of-range limit is refused, not clamped", r.status_code == 400 and "1"
 r = http.post("/channels/verify-token", data={"channel": "api", "token": "x"}).json()
 check("verify-token on the api channel says the key is generated", r.get("ok") is False and r.get("error"), r)
 
-bid, loi = chatbot_store.create_bot({"name": "Trợ lý nội bộ", "agent_slug": "tro-ly", "brain": "b",
+bid, loi = chatbot_store.create_bot({"name": "Trợ lý nội bộ", "agent_slug": "ari-house", "brain": "b",
                                      "account_ids": [AID], "muc_quyen": "read_docs"})
 check("a bot can serve the api account", bool(bid) and not loi, loi)
 
@@ -332,6 +346,47 @@ async def main():
     ENGINE["sleep"] = 0.0
     check("two calls with one message_id at once: one 200, one 409, one engine run",
           sorted((sa, sb)) == [200, 409] and len(CALLS) == 1 and oa["reply"] == ob["reply"], (sa, sb, len(CALLS)))
+
+    # ============================================================
+    # 6a. Verified Ari's House FAQ grounding is server-authored and survives dedupe
+    # ============================================================
+    CALLS.clear()
+    ret_req = body(message_id="ari-return-grounded", conversation_id="ari-house-return", scopes=["ari-house"],
+                   text="Đổi trả mấy ngày vậy Ari?")
+    sr, ret = await call(ret_req)
+    expected_returns = {"kind": "verified-v1", "used_source_ids": ["ari-house/returns"]}
+    check("Ari return FAQ is built from the approved scoped policy with a server source ID",
+          sr == 200 and "3 ngày" in ret.get("reply", "") and "30%" in ret.get("reply", "")
+          and ret.get("grounding") == expected_returns,
+          (sr, ret))
+    sr2, ret2 = await call(ret_req)
+    check("duplicate return FAQ keeps identical grounding metadata",
+          sr2 == 409 and ret2.get("duplicate") is True and ret2.get("grounding") == expected_returns
+          and ret2.get("reply") == ret.get("reply"), (sr2, ret2))
+
+    event_req = body(message_id="ari-event-grounded", conversation_id="ari-house-event", scopes=["ari-house"],
+                     text="Black Friday Ari có ưu đãi gì?")
+    with patch.object(api._datetime, "datetime", wraps=datetime) as clock:
+        clock.now.return_value = datetime(2026, 11, 21)
+        se, event = await call(event_req)
+    check("Ari event FAQ includes validated facts and the fixed events source ID",
+          se == 200 and "26/11/2026" in event.get("reply", "") and "70%" in event.get("reply", "")
+          and "60%" in event.get("reply", "")
+          and event.get("grounding") == {"kind": "verified-v1", "used_source_ids": ["ari-house/events"]},
+          (se, event))
+    sg, greeting = await call(body(message_id="ari-greeting", conversation_id="ari-house-greet", scopes=["ari-house"],
+                                   text="Chào Ari"))
+    check("Ari greeting has no unsupported grounding claim", sg == 200 and "grounding" not in greeting, (sg, greeting))
+    sn, no_scope = await call(body(message_id="ari-no-scope", conversation_id="ari-house-no-scope", scopes=[],
+                                   text="Đổi trả mấy ngày vậy Ari?"))
+    check("Ari FAQ never claims a source when trusted scope is absent",
+          sn == 200 and "grounding" not in no_scope, (sn, no_scope))
+
+    w("rieng-theo-nhom/api-ari-house/thong-tin-ari-co-ban.md", ARI_POLICY.split("Đơn mua")[0])
+    sm, missing_facts = await call(body(message_id="ari-return-missing-facts", scopes=["ari-house"], text="Đổi trả mấy ngày vậy Ari?"))
+    check("Ari FAQ does not claim grounding when approved policy lacks required facts",
+          sm == 200 and "grounding" not in missing_facts, (sm, missing_facts))
+    w("rieng-theo-nhom/api-ari-house/thong-tin-ari-co-ban.md", ARI_POLICY)
 
     # ============================================================
     # 7. Failures say nothing about the machine; timeout; retry after a failure

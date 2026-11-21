@@ -491,7 +491,7 @@ Content-Type: application/json
 
 | Status | When |
 |---|---|
-| `200` | `{"ok": true, "reply": "...", "silent": false, "turn_id": "turn_..."}`. `silent: true` when the bot chose silence |
+| `200` | `{"ok": true, "reply": "...", "silent": false, "turn_id": "turn_..."}`. `silent: true` when the bot chose silence. Some turns may also include `grounding: {"kind":"verified-v1","used_source_ids":[...]}` when the backend constructs an answer from verified document data; the field is omitted when there is no verified basis. |
 | `400` | Bad request body, `field` names the field |
 | `401` | Wrong or rotated key |
 | `403` | Source not allowed, bot switched off, or bot above the permission ceiling (`code` says which) |
@@ -525,6 +525,8 @@ A bot on the API channel **runs only at Read only or Read documents**. Higher, a
 A document matching **any** scope of the list is seen by that turn. Documents of other scopes never show, not even their file names. Without `scopes` the turn sees no private document. A document with `chat_scope: cs-hn` (no `api:`) or under `rieng-theo-nhom/cs-hn/` is **not** seen by the API channel: those belong to the other channels.
 
 `conversation_id` is **never a scope**. For a scope with `:` (like `vai:nhan-vien`) use `chat_scope: api:vai:nhan-vien`, since Windows folder names cannot hold `:`.
+
+`grounding` is backend-generated metadata, not a citation written by the model. `used_source_ids` lists sources only when the backend constructs the answer from source content or verifies it against evidence from that turn. A filename, prompt context or search result alone is not enough. A duplicate request (`409`) keeps the original response's grounding metadata.
 
 ### `context` is data, not instructions
 
