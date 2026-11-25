@@ -87,7 +87,7 @@ async def mot_luot(cli, turn, dump):
 async def tao_trong_luot(turn):
     tok = turn_context.bind(turn)
     try:
-        return agy.tao_home_luot()
+        return agy.make_turn_home()
     finally:
         turn_context.reset(tok)
 
@@ -137,7 +137,7 @@ def main():
               b["luot"]["sender_id"] == "ma-nhan-vien" and b["luot"]["la_chu"] is False, b["luot"])
 
         # 3. Không có lượt: không mã, HOME thật.
-        check("không có lượt thì không tạo HOME", agy.tao_home_luot() is None)
+        check("không có lượt thì không tạo HOME", agy.make_turn_home() is None)
         d4 = goc / "d4.json"
         v = asyncio.run(mot_luot(cli_gia(goc, d4), None, d4))
         check("không có lượt thì chạy HOME thật", v["home"] == str(goc))
@@ -146,7 +146,7 @@ def main():
         # 4. Lỗi giữa chừng không để lại gì và không chặn lượt.
         with patch.object(agy.os, "symlink", side_effect=OSError("cam")):
             check("lỗi symlink về None", asyncio.run(tao_trong_luot(chu)) is None)
-        check("lỗi symlink không để rác", not list(agy._goc_home_luot().glob("luot-*")))
+        check("lỗi symlink không để rác", not list(agy._turn_home_root().glob("luot-*")))
 
     # 5. Hub tắt: không có entry `javis` thì không tạo gì.
     goc2 = Path(tempfile.mkdtemp(prefix="agyluot-home2-"))

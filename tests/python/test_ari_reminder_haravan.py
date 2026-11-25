@@ -54,7 +54,8 @@ check("other background work untouched", swap_args(raw, "loop")["spec"] is None)
 
 def codex_config(tag):
     engine = SimpleNamespace(extra_config=[])
-    with patch.object(aux_engine, "availability", lambda *a, **k: (True, "")), \n            patch.object(aux_engine, "_build_codex", lambda *a, **k: engine), \
+    with patch.object(aux_engine, "availability", lambda *a, **k: (True, "")), \
+            patch.object(aux_engine, "_build_codex", lambda *a, **k: engine), \
             patch.object(aux_engine, "_per_account", lambda prov, first, settings, build: [first]):
         links = aux_engine._links_for_step(SPEC, SimpleNamespace(), "suggest", tag, None, {}, None)
     return engine.extra_config if links else None

@@ -2,7 +2,7 @@
 
     python tests/run.py truoc_tra_loi      (KHÔNG mạng)
 
-Canh đúng hợp đồng trong plugins_host.fire_truoc_tra_loi:
+Canh đúng hợp đồng trong plugins_host.fire_reply_hooks:
 - plugin trả {"reply": câu} -> khách nhận đúng câu đó, model KHÔNG chạy, Hộp thư có cả tin khách
   lẫn câu bot, hook nhận câu NGUYÊN VĂN + turn của người gửi (không phải chủ).
 - plugin trả None / ném lỗi / quá giờ -> model trả lời như chưa có hook (fail-open, bot không im).
@@ -161,11 +161,11 @@ ra = hoi("câu trắng")
 check("reply toàn khoảng trắng: model trả lời", ra.get("text") == "câu của model")
 
 # 6. Plugin quá giờ -> bỏ qua
-cu = plugins_host.TRUOC_TRA_LOI_TRAN_S
-plugins_host.TRUOC_TRA_LOI_TRAN_S = 0.2
+cu = plugins_host.REPLY_HOOK_TIMEOUT_S
+plugins_host.REPLY_HOOK_TIMEOUT_S = 0.2
 os.environ["TRUOC_TEST_MODE"] = "cham"
 ra = hoi("chậm")
-plugins_host.TRUOC_TRA_LOI_TRAN_S = cu
+plugins_host.REPLY_HOOK_TIMEOUT_S = cu
 check("plugin quá giờ: model trả lời", ra.get("text") == "câu của model" and len(_goi_model) == 1)
 
 # 7. Hook async trả lời được (và đứng trước nên thắng)

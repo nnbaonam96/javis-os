@@ -2178,8 +2178,8 @@ def drop_engine_files(out):
     return out
 
 
-async def _hoi_truoc_tra_loi(bot_id: str, cfg: dict, text: str, meta: dict, kenh: str) -> str:
-    """Hỏi hook `truoc_tra_loi` của plugin (xem plugins_host.fire_truoc_tra_loi). Chuỗi rỗng = không
+async def _ask_reply_hooks(bot_id: str, cfg: dict, text: str, meta: dict, kenh: str) -> str:
+    """Hỏi hook `truoc_tra_loi` của plugin (xem plugins_host.fire_reply_hooks). Chuỗi rỗng = không
     ai trả lời. Mọi lỗi ở đây đều nuốt: cửa này hỏng thì model trả lời như thường, bot không im."""
     try:
         import plugins_host
@@ -2189,15 +2189,15 @@ async def _hoi_truoc_tra_loi(bot_id: str, cfg: dict, text: str, meta: dict, kenh
         vault = str(_deps["brain_root"](cfg.get("brain") or "brain"))
         if not plugins_host.has_reply_hooks(vault):
             return ""
-        luot = turn_context.from_meta(kenh, meta, la_chu=False)
-        return await plugins_host.fire_truoc_tra_loi(vault, {
-            "text": text, "turn": luot, "bot_id": bot_id, "bot_slug": cfg.get("slug") or ""}) or ""
+        turn_info = turn_context.from_meta(kenh, meta, la_chu=False)
+        return await plugins_host.fire_reply_hooks(vault, {
+            "text": text, "turn": turn_info, "bot_id": bot_id, "bot_slug": cfg.get("slug") or ""}) or ""
     except Exception as e:      # noqa: BLE001 - cửa nghe trước hỏng không được làm mất câu trả lời
         print(f"[chatbot {bot_id}] truoc_tra_loi: {type(e).__name__}: {e}", file=sys.stderr)
         return ""
 
 
-def _xong_truoc_tra_loi(bot_id: str, cfg: dict, text: str, meta: dict, chat_id: str, dap: str) -> dict:
+def _finish_hook_reply(bot_id: str, cfg: dict, text: str, meta: dict, chat_id: str, dap: str) -> dict:
     """Lượt do plugin trả lời: ghi nhật ký + Hộp thư y như lượt model, để chủ soi lại được."""
     run = _RUNNING.get(bot_id)
     if run:
@@ -2209,7 +2209,7 @@ def _xong_truoc_tra_loi(bot_id: str, cfg: dict, text: str, meta: dict, chat_id: 
         "hoi": text, "dap": dap, "loi": "", "co_tai_lieu": False, "nguon": "plugin",
         "chuyen_nguoi": False, "bi": False, "muc_quyen": cfg.get("muc_quyen") or "suggest",
     })
-    ghi_tin_bot(cfg, meta, dap)
+    record_bot_message(cfg, meta, dap)
     return {"text": dap, "files": []}
 
 
@@ -2325,9 +2325,9 @@ def _make_answer_fn(bot_id: str):
         # người thật chưa tiếp quản) và TRƯỚC engine. Đặt ngay sau plugin_context của bản gốc: plugin
         # đã nạp ở đó, nên cửa này không nạp lại (lần nạp đầu chặn vòng sự kiện vài trăm ms). Không
         # plugin nào trả lời -> đi tiếp y như chưa có cửa này.
-        dap_truoc = await _hoi_truoc_tra_loi(bot_id, cfg, text, meta or {}, kenh_luot)
-        if dap_truoc:
-            return _xong_truoc_tra_loi(bot_id, cfg, text, meta or {}, chat_id, dap_truoc)
+        hook_reply = await _ask_reply_hooks(bot_id, cfg, text, meta or {}, kenh_luot)
+        if hook_reply:
+            return _finish_hook_reply(bot_id, cfg, text, meta or {}, chat_id, hook_reply)
         # Trong nhóm Zalo cá nhân cả nhóm dùng CHUNG một mạch hội thoại (khoá theo nhóm), nên
         # model phải biết ai đang nói. Telegram giữ nguyên như cũ.
         text_engine = text
