@@ -507,7 +507,7 @@ def _guard(ent, fn, mode):
     """Bọc 1 route entry MCP thành async call có kiểm quyền + audit."""
     conn = ent["conn"]
     tool = ent["tool"]
-    connector = mcp_catalog.get(conn.get("connector_id"))
+    connector = mcp_catalog.for_connection(conn)
 
     async def _call(args):
         cls = mcp_catalog.classify(connector, tool, args)
@@ -2301,7 +2301,7 @@ async def discover_all(mode="full", vault_root=None, include_plugins=True, inclu
         if owner_browser and browser_login.is_browser_spec(raw.get("spec")):
             continue
         conn = raw["conn"]
-        connector = mcp_catalog.get(conn.get("connector_id"))
+        connector = mcp_catalog.for_connection(conn)
         # A gated Team step (0.207.0) lists like full: an outside action must be callable so the gate can stop it and
         # turn it into an approval request, and run it once approved. The call itself is still capped (`_guard`).
         eff = mcp_catalog.effective_perm(conn.get("perm"), "full" if mode == team_gate.HUB_MODE else mode)

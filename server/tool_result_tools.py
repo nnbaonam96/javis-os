@@ -152,7 +152,7 @@ def is_plain_read(ent: dict, args: dict) -> bool:
     try:
         import mcp_catalog
         from fnmatch import fnmatch
-        connector = mcp_catalog.get(conn.get("connector_id")) or {}
+        connector = mcp_catalog.for_connection(conn) or {}
         if mcp_catalog.classify(connector, tool, args) != "read":
             return False
         meta = connector.get("tool_meta") or {}

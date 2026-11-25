@@ -541,6 +541,17 @@ def call_rule(connector, tool):
     return None
 
 
+def for_connection(conn):
+    """Resolve the catalog for an installed connection, including Ari's trusted Haravan reads."""
+    import os
+
+    catalog = get(conn.get("connector_id"))
+    haravan_id = os.getenv("JAVIS_HARAVAN_READ_CONNECTION_ID")
+    if haravan_id and conn.get("id") == haravan_id and conn.get("connector_id") == "custom":
+        return {"tool_meta": {"read": ["haravan_orders_list", "haravan_transactions_list"]}}
+    return catalog
+
+
 def classify(connector, tool, args=None):
     """'read' | 'write' | 'danger' cho MỘT lời gọi tool (tên GỐC, không namespace).
     args=None (lúc tools/list) → tool đa hành động tạm coi 'read' để còn LIỆT KÊ được;

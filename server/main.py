@@ -2856,7 +2856,34 @@ def _aux_model(tag: str = ""):
 def _aux_swap(cli, mode=None, tag=None):
     """Engine Claude vừa dựng cho việc nền -> engine theo model phụ người dùng chọn.
     Mặc định/hỏng cấu hình thì trả lại chính engine Claude đó (việc nền không được chết)."""
-    return aux_engine.swap(cli, mode=mode, tag=tag, codex_profile=_write_codex_profile)
+    # Scheduled reminders carry their own runtime tag. An explicit override keeps
+    # this job separate from the default model shared by all other background work.
+    engine_tag = str(getattr(cli, "tag", "") or "")
+    spec = _reminder_model_override(engine_tag) if tag == "reminder" else None
+    return aux_engine.swap(cli, mode=mode, tag=engine_tag if spec else tag, spec=spec,
+                           codex_profile=_write_codex_profile)
+
+
+def _reminder_model_override(engine_tag):
+    if not engine_tag.startswith("reminder:r_"):
+        return None
+    raw = os.getenv("JAVIS_REMINDER_MODEL_OVERRIDES")
+    if not raw:
+        return None
+    try:
+        overrides = json.loads(raw)
+    except ValueError:
+        print("[reminders] Invalid JAVIS_REMINDER_MODEL_OVERRIDES JSON", file=sys.stderr)
+        return None
+    spec = overrides.get(engine_tag) if isinstance(overrides, dict) else None
+    if not isinstance(spec, dict):
+        return None
+    provider, model, reasoning = (spec.get(key) for key in ("provider", "model", "reasoning"))
+    if (not isinstance(provider, str) or not _provider_def(provider)
+            or not isinstance(model, str) or not model.strip()
+            or reasoning not in model_routing.LEVELS):
+        return None
+    return {"provider": provider, "model": model.strip(), "reasoning": reasoning}
 
 
 def _side_work_paused() -> str:

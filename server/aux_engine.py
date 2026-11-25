@@ -1349,8 +1349,14 @@ def _links_for_step(step: dict, cli, mode, tag, codex_profile, settings, claude_
         return []
     try:
         if prov == CODEX:
-            return _per_account(CODEX, _build_codex(sp, cli, mode, tag, codex_profile), settings,
-                                lambda: _build_codex(sp, cli, mode, tag, codex_profile))
+            def build_codex():
+                engine = _build_codex(sp, cli, mode, tag, codex_profile)
+                # Explicit reminder overrides reach this route with the reminder's unique tag.
+                if str(tag or "").startswith("reminder:r_") and level == "medium":
+                    engine.extra_config.append("model_reasoning_effort=medium")
+                return engine
+
+            return _per_account(CODEX, build_codex(), settings, build_codex)
         if prov == GROK_CLI:
             return _per_account(GROK_CLI, _build_grok(sp, cli, mode, tag), settings,
                                 lambda: _build_grok(sp, cli, mode, tag))
