@@ -2857,7 +2857,9 @@ def _aux_model(tag: str = ""):
 def _aux_swap(cli, mode=None, tag=None):
     """Engine Claude vừa dựng cho việc nền -> engine theo model phụ người dùng chọn.
     Mặc định/hỏng cấu hình thì trả lại chính engine Claude đó (việc nền không được chết)."""
-    return aux_engine.swap(cli, mode=mode, tag=tag, codex_profile=_write_codex_profile)
+    import ari_overrides
+    return ari_overrides.aux_swap(cli, mode=mode, tag=tag, codex_profile=_write_codex_profile,
+                                  provider_exists=_provider_def, levels=model_routing.LEVELS)
 
 
 def _side_work_paused() -> str:

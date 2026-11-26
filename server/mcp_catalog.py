@@ -541,6 +541,12 @@ def call_rule(connector, tool):
     return None
 
 
+def for_connection(conn):
+    """Resolve the catalog for an installed connection, including Ari's trusted Haravan reads."""
+    import ari_overrides
+    return ari_overrides.haravan_read_catalog(conn, get(conn.get("connector_id")))
+
+
 def classify(connector, tool, args=None):
     """'read' | 'write' | 'danger' cho MỘT lời gọi tool (tên GỐC, không namespace).
     args=None (lúc tools/list) → tool đa hành động tạm coi 'read' để còn LIỆT KÊ được;
