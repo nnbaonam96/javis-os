@@ -2287,6 +2287,13 @@ def _make_answer_fn(bot_id: str):
         cfg["_ngu_canh_nhom"] = ngu_canh_nhom(meta, kenh_luot, aid_luot)
         cfg["_customer_profile"] = customer_profile(cfg, meta)
         cfg["_ngu_canh_plugin"] = await plugin_context(cfg, meta or {}, kenh_luot, aid_luot)
+        import ari_overrides
+        hook_out = await ari_overrides.try_reply_hook(
+            bot_id, cfg, text, meta or {}, chat_id, kenh_luot,
+            brain_root=_deps["brain_root"], running=_RUNNING, stuck_counts=_BI_LIEN_TIEP,
+            chatbot_log=chatbot_log, record_bot_message=record_bot_message)
+        if hook_out:
+            return hook_out
         # Trong nhóm Zalo cá nhân cả nhóm dùng CHUNG một mạch hội thoại (khoá theo nhóm), nên
         # model phải biết ai đang nói. Telegram giữ nguyên như cũ.
         text_engine = text
