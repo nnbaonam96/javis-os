@@ -1,0 +1,308 @@
+name: Ari - dựng image Javis có bản vá
+
+# Fork RIÊNG của Ari (nnbaonam96/javis-os), KHÔNG gửi gì về repo gốc blogminhquy/javis-os.
+#
+# Nhánh `ari-main` = bản gốc + các module vá riêng (`ari_overrides.py`, `ari_house_grounding.py`,
+# hook `truoc_tra_loi`, Antigravity turn key) + chính file này. Mỗi 30 phút cron VPS kích hoạt:
+#   1. prepare: kéo `main` mới nhất của repo gốc, kiểm tra cache/GHCR, rồi rebase bản vá lên trên;
+#   2. python (4 shard song song qua tests/run.py cô lập) + common (compileall, ignore, english, import, JS);
+#   3. publish: dựng image và đẩy lên ghcr.io/nnbaonam96/javis-os (:latest, :<VERSION>-ari, :src-...);
+#   4. notify: nếu đỏ thì lưu dấu đỏ theo (up, ari) và mở/nhắc đúng MỘT issue `ari-build-do`.
+
+on:
+  push:
+    branches: [ari-main]
+  workflow_dispatch:
+    inputs:
+      force:
+        description: "Dựng lại dù không có gì mới"
+        type: boolean
+        default: false
+
+concurrency:
+  group: ari-build
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  packages: write
+  issues: write
+
+env:
+  UPSTREAM: https://github.com/blogminhquy/javis-os.git
+  IMAGE: ghcr.io/nnbaonam96/javis-os
+
+jobs:
+  prepare:
+    name: Kiểm tra nguồn & chồng bản vá
+    runs-on: ubuntu-latest
+    outputs:
+      up: ${{ steps.resolve.outputs.up }}
+      up_full: ${{ steps.resolve.outputs.up_full }}
+      ari: ${{ steps.resolve.outputs.ari }}
+      tag: ${{ steps.resolve.outputs.tag }}
+      version: ${{ steps.rebase.outputs.version }}
+      skip: ${{ steps.have.outputs.skip }}
+      rebase_outcome: ${{ steps.rebase.outcome }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ari-main
+          fetch-depth: 0
+
+      - name: Lấy SHA nguồn gốc và nhánh Ari
+        id: resolve
+        shell: bash
+        run: |
+          git fetch --no-tags "$UPSTREAM" main:refs/remotes/upstream/main
+          up_full=$(git rev-parse upstream/main)
+          up=$(git rev-parse --short=8 upstream/main)
+          ari=$(git rev-parse --short=8 HEAD)
+          echo "up=$up" >> "$GITHUB_OUTPUT"
+          echo "up_full=$up_full" >> "$GITHUB_OUTPUT"
+          echo "ari=$ari" >> "$GITHUB_OUTPUT"
+          echo "tag=src-$up-$ari" >> "$GITHUB_OUTPUT"
+
+      - name: Nguồn này từng đỏ chưa
+        id: failed
+        uses: actions/cache/restore@v4
+        with:
+          path: .ari-fail
+          key: ari-fail-${{ steps.resolve.outputs.tag }}
+
+      - name: Login to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Đã có image hoặc dấu đỏ cho nguồn này chưa
+        id: have
+        shell: bash
+        run: |
+          if [ "${{ inputs.force }}" != "true" ] && \
+             docker buildx imagetools inspect "$IMAGE:${{ steps.resolve.outputs.tag }}" >/dev/null 2>&1; then
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            echo "Không có gì mới (đã có \`${{ steps.resolve.outputs.tag }}\`)." >> "$GITHUB_STEP_SUMMARY"
+          elif [ "${{ inputs.force }}" != "true" ] && [ "${{ steps.failed.outputs.cache-hit }}" = "true" ]; then
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            echo "Nguồn \`${{ steps.resolve.outputs.tag }}\` đã ĐỎ ở run trước, không thử lại. VPS giữ bản cũ." >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Chồng bản vá lên main mới nhất của repo gốc
+        id: rebase
+        if: steps.have.outputs.skip != 'true'
+        shell: bash
+        run: |
+          git config user.name "ari-build"
+          git config user.email "ari-build@users.noreply.github.com"
+          up="${{ steps.resolve.outputs.up }}"
+          if ! git rebase "${{ steps.resolve.outputs.up_full }}"; then
+            git rebase --abort || true
+            echo "::error::Bản vá không chồng được lên repo gốc $up (xung đột). KHÔNG dựng image, VPS giữ bản cũ."
+            { echo "### ĐỎ: bản vá xung đột với repo gốc \`$up\`"
+              echo "VPS vẫn chạy bản cũ. Mở phiên ở \`javis-os-bong\` để rebase nhánh \`ari-main\`."; } >> "$GITHUB_STEP_SUMMARY"
+            exit 1
+          fi
+          version=$(tr -d ' \n\r' < VERSION)
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          {
+            echo "### Nguồn"
+            echo "- Repo gốc: \`$up\` (v$version)"
+            echo "- Commit vá chồng lên:"
+            git log --format='  - `%h` %s' "${{ steps.resolve.outputs.up_full }}..HEAD"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  python:
+    name: Test Python (nhóm ${{ matrix.shard }}/4)
+    needs: prepare
+    if: needs.prepare.outputs.skip != 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3, 4]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ari-main
+          fetch-depth: 0
+
+      - name: Chồng bản vá lên đúng commit gốc đã chốt
+        shell: bash
+        run: |
+          git config user.name "ari-build"
+          git config user.email "ari-build@users.noreply.github.com"
+          git fetch --no-tags "$UPSTREAM" main:refs/remotes/upstream/main
+          git rebase "${{ needs.prepare.outputs.up_full }}"
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Cài dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt pytest
+
+      - name: Chạy test Python (cô lập từng luồng qua tests/run.py)
+        env:
+          PYTHONIOENCODING: utf-8
+        run: python tests/run.py --py --shard ${{ matrix.shard }}/4 --jobs 4 --timeout 1200 -v
+
+  common:
+    name: Byte-compile, lint, import, test JS
+    needs: prepare
+    if: needs.prepare.outputs.skip != 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ari-main
+          fetch-depth: 0
+
+      - name: Chồng bản vá lên đúng commit gốc đã chốt
+        shell: bash
+        run: |
+          git config user.name "ari-build"
+          git config user.email "ari-build@users.noreply.github.com"
+          git fetch --no-tags "$UPSTREAM" main:refs/remotes/upstream/main
+          git rebase "${{ needs.prepare.outputs.up_full }}"
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Cài dependencies & kiểm tra chung
+        env:
+          PYTHONIOENCODING: utf-8
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt pytest
+          python -m compileall -q server system/plugins
+          python tests/python/test_ignore_files.py
+          python tests/python/test_english_identifiers.py
+          smoke_state=$(mktemp -d)
+          (cd server && JAVIS_STATE_DIR="$smoke_state" python -c "import main; print(f'nap main ok, {len(main.app.routes)} route')")
+          python tests/run.py --js -v
+
+  publish:
+    name: Dựng & đẩy image
+    needs: [prepare, python, common]
+    if: needs.prepare.outputs.skip != 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ari-main
+          fetch-depth: 0
+
+      - name: Chồng bản vá lên đúng commit gốc đã chốt
+        shell: bash
+        run: |
+          git config user.name "ari-build"
+          git config user.email "ari-build@users.noreply.github.com"
+          git fetch --no-tags "$UPSTREAM" main:refs/remotes/upstream/main
+          git rebase "${{ needs.prepare.outputs.up_full }}"
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Login to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Phiên bản Codex CLI / Claude Code
+        shell: bash
+        run: |
+          echo "CODEX_CLI_VERSION=$(npm view @openai/codex@latest version)" >> "$GITHUB_ENV"
+          echo "CLAUDE_CLI_VERSION=$(npm view @anthropic-ai/claude-code@latest version)" >> "$GITHUB_ENV"
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Dựng & đẩy image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: true
+          build-args: |
+            CODEX_CLI_VERSION=${{ env.CODEX_CLI_VERSION }}
+            CLAUDE_CLI_VERSION=${{ env.CLAUDE_CLI_VERSION }}
+            JAVIS_IMAGE_SOURCE=${{ env.IMAGE }}
+          labels: |
+            org.opencontainers.image.source=https://github.com/nnbaonam96/javis-os
+          tags: |
+            ${{ env.IMAGE }}:latest
+            ${{ env.IMAGE }}:${{ needs.prepare.outputs.version }}-ari
+            ${{ env.IMAGE }}:${{ needs.prepare.outputs.tag }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Xanh lại thì đóng báo đỏ
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          for n in $(gh api "repos/$GITHUB_REPOSITORY/issues?labels=ari-build-do&state=open" --jq '.[].number'); do
+            gh issue close "$n" -R "$GITHUB_REPOSITORY" --comment "Xanh lại: đã đẩy v${{ needs.prepare.outputs.version }} + bản vá Ari. Watchtower trên VPS tự kéo trong vòng 24h, hoặc bấm Cập nhật ngay trong app."
+          done
+
+      - name: Tóm tắt
+        run: |
+          echo "### Đã đẩy \`$IMAGE:latest\` = v${{ needs.prepare.outputs.version }} + bản vá Ari" >> "$GITHUB_STEP_SUMMARY"
+          echo "Quay lại bản cũ: đổi image trên Hostinger thành \`$IMAGE:<phiên bản>-ari\` rồi Triển khai." >> "$GITHUB_STEP_SUMMARY"
+
+  notify:
+    name: Ghi dấu đỏ & báo cho chủ
+    needs: [prepare, python, common, publish]
+    if: failure()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Ghi nhớ nguồn này đã đỏ
+        if: needs.prepare.outputs.tag != ''
+        run: echo "${{ needs.prepare.outputs.tag }}" > .ari-fail
+
+      - name: Lưu dấu đỏ
+        if: needs.prepare.outputs.tag != ''
+        uses: actions/cache/save@v4
+        with:
+          path: .ari-fail
+          key: ari-fail-${{ needs.prepare.outputs.tag }}
+
+      - name: Báo đỏ cho chủ (một issue, không spam)
+        env:
+          GH_TOKEN: ${{ github.token }}
+          UP: ${{ needs.prepare.outputs.up }}
+          REBASE_OUTCOME: ${{ needs.prepare.outputs.rebase_outcome }}
+        run: |
+          run_url="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
+          if [ "$REBASE_OUTCOME" = "failure" ]; then
+            ly_do="Bản vá Ari **xung đột** với bản gốc \`${UP:-?}\` (git rebase dừng)."
+          else
+            ly_do="Bản vá chồng được lên bản gốc \`${UP:-?}\` nhưng **test đỏ** hoặc bước dựng image hỏng."
+          fi
+          body="@nnbaonam96 Build image Ari ĐỎ, VPS vẫn chạy bản cũ (an toàn, chỉ là chưa lên bản mới).
+
+          - Lý do: $ly_do
+          - Run: $run_url
+          - Cách xử lý: mở phiên ở \`D:\PROJECTS\_LAB\javis-os-bong\`, nói \"build Ari đỏ, xem issue này và sửa\". Runbook: \`D:\PROJECTS\_LAB\javis-os-ari\RUNBOOK-build-do.md\`.
+
+          <!-- up:${UP:-none} -->"
+          gh label create ari-build-do -R "$GITHUB_REPOSITORY" --color D93F0B --description "Build image Ari đỏ" >/dev/null 2>&1 || true
+          num=$(gh api "repos/$GITHUB_REPOSITORY/issues?labels=ari-build-do&state=open&per_page=1" --jq '.[0].number // empty')
+          if [ -z "$num" ]; then
+            gh issue create -R "$GITHUB_REPOSITORY" --label ari-build-do --title "Build Ari đỏ: VPS đang giữ bản cũ" --body "$body"
+          elif ! gh issue view "$num" -R "$GITHUB_REPOSITORY" --json body,comments --jq '[.body]+[.comments[].body]|join(" ")' | grep -qF "<!-- up:${UP:-none} -->"; then
+            gh issue comment "$num" -R "$GITHUB_REPOSITORY" --body "$body"
+          fi
