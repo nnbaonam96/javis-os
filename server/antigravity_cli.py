@@ -1373,6 +1373,22 @@ def trang_thai_mcp(vault_root=None) -> dict:
     return {"ok": any(d["co_javis"] for d in ds), "files": ds, "thieu": thieu}
 
 
+def _turn_home_root() -> Path:
+    import ari_antigravity_turn
+    return ari_antigravity_turn.turn_home_root()
+
+
+def make_turn_home(custom_mcp: Optional[str] = None) -> Optional[str]:
+    import ari_antigravity_turn
+    return ari_antigravity_turn.make_turn_home(
+        custom_mcp, home_dir=lambda: _home_dir(), mcp_home_paths=_duong_mcp_home)
+
+
+def remove_turn_home(home: Optional[str]) -> None:
+    import ari_antigravity_turn
+    ari_antigravity_turn.remove_turn_home(home, home_dir=lambda: _home_dir())
+
+
 # ---------------------------------------------------------------------------
 # Một lượt chạy
 # ---------------------------------------------------------------------------
@@ -1800,6 +1816,10 @@ class AntigravityCLI:
         args = self._build_args(None if qua_stdin else prompt_argv,
                                 noi_mach=(duong != "file"), them=them_args,
                                 ct_stdin=duong.partition(":")[2])
+        # Lấy mã ở ĐÂY, trong ngữ cảnh của lượt: luồng đọc bên dưới không mang theo ContextVar.
+        # Tài khoản Google phụ (agy_home) chạy HOME riêng của nó: chưa mang mã lượt được, nên không
+        # tạo HOME lượt (plugin cần danh tính sẽ từ chối - sai về phía an toàn).
+        turn_home = None if getattr(self, "agy_home", None) else make_turn_home(self.mcp_config)
         loop = asyncio.get_running_loop()
         hang: asyncio.Queue = asyncio.Queue()
         HET = object()
@@ -1827,6 +1847,9 @@ class AntigravityCLI:
             proc = None
             try:
                 _env = self.engine_env()
+                if turn_home:   # HOME riêng của lượt, mcp_config chỉ mang mã của lượt này
+                    _env = dict(_env if _env is not None else os.environ)
+                    _env["HOME"] = turn_home
                 proc = subprocess.Popen(
                     args, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                     cwd=self.cwd, text=True, encoding="utf-8", errors="replace", bufsize=1,
@@ -1935,6 +1958,7 @@ class AntigravityCLI:
                 # Dọn file ngữ cảnh ở ĐÂY chứ không ở vòng đọc sự kiện: luồng này luôn chạy hết,
                 # kể cả khi người dùng đóng tab giữa chừng và không ai đọc nốt hàng đợi nữa.
                 # Để sót là rác tích dần trong brain của người dùng.
+                remove_turn_home(turn_home)
                 if tep_ngu_canh and not os.environ.get("JAVIS_AGY_GIU_NGU_CANH"):
                     try:
                         os.unlink(tep_ngu_canh)
