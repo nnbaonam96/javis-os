@@ -5,6 +5,18 @@ MỌI lượt chat của Javis, có trần ngân sách (`tests/python/test_promp
 dev thì người dùng Javis không bao giờ cần. Để ở đây thì viết bao nhiêu cũng được, không đánh
 thuế lên lượt chat nào cả.
 
+## Việc đầu tiên của phiên: gắn số phiên bản vào tên phiên (từ 2026-11-27)
+
+Chủ repo 27/11/2026: mở danh sách phiên là phải biết phiên nào bắt đầu từ bản nào. Ngay khi đọc
+tới đây (lượt đầu, hoặc trước khi tạo nhánh), gọi `get_session` (không truyền `session_id`) lấy tên phiên, rồi
+`set_session_title` đổi thành `v<bản> · <tên hiện tại>`, với `<bản>` là nội dung file `VERSION`
+lúc mở phiên (ví dụ `v0.649.0 · Sửa lỗi gửi ảnh Zalo`). Tên đã mở đầu bằng `v` kèm số phiên bản
+thì để nguyên. Không có tool `set_session_title` (phiên chạy trên máy, không phải cloud) thì bỏ qua.
+
+Không làm bằng hook SessionStart: hook phải nằm trong `.claude/settings.json`, mà
+`tests/python/test_ignore_files.py` cấm track mọi file tên `settings.json` (chặn lộ bí mật), và
+Javis trên máy người dùng cũng chạy `claude` với cwd là repo này.
+
 ## Nhánh, PR và merge
 
 - Vẫn phát triển trên nhánh riêng và mở PR như thường lệ.
@@ -16,6 +28,24 @@ thuế lên lượt chat nào cả.
   mới** để các máy khác nhận biết có bản cập nhật. Từ 2026-11-04 việc tăng số do máy làm, xem mục
   dưới. Sau khi merge, xác nhận workflow **Release** chạy xanh và `VERSION` trên `main` đã tăng.
   Không coi việc merge code là đã phát hành xong nếu bản mới chưa được xuất bản.
+
+## Xử lý issue và PR của người khác: xác minh, rồi làm tốt hơn (từ 2026-11-26)
+
+Chủ repo 26/11/2026: "mỗi lần anh yêu cầu xem pull request hoặc lỗi thì em phải xem xét có đúng là
+lỗi thật hay không, và nếu là lỗi thật thì mình phải làm tốt hơn bản pull request người ta gửi, chứ
+không chỉ merge vào ... những trải nghiệm sử dụng phải là cái số đông dùng được, chứ không customize
+cho một cá nhân".
+
+- **Xác minh trước.** Đối chiếu từng issue/PR với code `main` hiện tại (trích `file:dòng`): lỗi thật,
+  đã sửa rồi, trùng, hay không thuộc repo này (gói Store, plugin riêng của người dùng).
+- **Lỗi thật thì làm bản tốt hơn, không merge nguyên si.** Tìm gốc rễ và sửa cho mọi kênh, mọi
+  đường tương tự, không chỉ đúng chỗ người báo gặp. PR ngoài có ý hay mà còn hẹp (đoán theo tên
+  tool, chỉ một kênh, chỉ một ca) thì viết lại theo hướng chung và ghi công tác giả trong commit.
+- **Chỉ đưa vào lõi thứ số đông dùng được.** Yêu cầu riêng của một ngành, một khách (mã số thuế,
+  quy trình của một công ty...) thì tách phần dùng chung ra làm tính năng chung; phần riêng để gói
+  Store, skill hay plugin của người đó. Không nới cơ chế phân quyền để phục vụ một ca riêng.
+- PR ngoài đã đúng, gọn, CI xanh thì merge như thường. PR bị thay bằng bản tốt hơn thì đóng kèm lời
+  cảm ơn và đường dẫn tới bản thay thế.
 
 ## Số phiên bản: PR KHÔNG tự chọn số (từ 2026-11-04)
 

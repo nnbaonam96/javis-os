@@ -19,6 +19,7 @@ from pathlib import Path
 from typing import Optional
 
 from channels import KenhSpec
+import bot_split as _bot_split
 import localefmt
 import zalo_markup
 
@@ -84,7 +85,8 @@ TAG_FAIL_LIMIT = 3          # từng đó lần tag hỏng LIÊN TIẾP thì ngh
 TAG_PAUSE = 600             # giây nghỉ tag sau khi hỏng liên tiếp; tin vẫn đi bằng MCP như cũ
 # Trần một tin (0.171.2). Zalo từ chối cả tin quá dài (quanh 2000 ký tự) và khách không nhận được gì: chủ repo
 # 16/10/2026 gặp lần thứ ba, hai lần trước ở khách Khang Duy Dao. 1500 chừa chỗ cho "@Tên" khi tag trong nhóm.
-TIN_TOI_DA = 1500
+# The number lives in the channel capability table of bot_split (issue #1833), next to the other channels' limits.
+TIN_TOI_DA = _bot_split.CHANNELS["zalo_personal"].max_len
 NGHI_GIUA_DOAN = 1.2        # giây nghỉ giữa hai đoạn của một câu trả lời dài, cho giống người gõ và giữ thứ tự
 # Chỗ cắt tốt theo thứ tự ưu tiên: hết đoạn văn, hết dòng, hết câu, rồi mới tới khoảng trắng.
 _CHO_CAT = (re.compile(r"\n\s*\n"), re.compile(r"\n"), re.compile(r"[.!?…:;](?=\s)"), re.compile(r"\s"))
@@ -585,6 +587,34 @@ async def send_reaction(tk: dict, chat_id: str, msg_id: str, name: str, chat_typ
     return True, ""
 
 
+# Rename from the inbox (owner, 2026-11-27). A group gets a new name for every member (`group rename`); a person gets
+# the owner's own nickname for them, which only this account sees (`friend alias`), like renaming a contact in Zalo.
+RENAMES = {"group": "title", "private": "alias"}
+RENAME_TIMEOUT = 40
+
+
+async def rename(tk: dict, chat_id: str, name: str, chat_type: str = "private"):
+    """Rename a chat on Zalo through the CLI, in the session of the signed-in account. `(ok, error)`."""
+    import zalo_cli
+    import zalo_personal_channel
+    conn = zalo_personal_channel.ket_noi_theo_id(str(tk.get("id") or tk.get("external_id") or ""))
+    home = zalo_cli.home_of(conn) if conn else ""
+    if not home:
+        return False, localefmt.chu("tài khoản Zalo này chưa đăng nhập hoặc đã tắt", "this Zalo account is not signed in or is off")
+    group = str(chat_type or "") == "group"
+    cmd = ["group", "rename"] if group else ["friend", "alias"]
+    ok, _d, err = await zalo_cli.run_cli({"home": home}, cmd, [str(chat_id), str(name)], timeout=RENAME_TIMEOUT)
+    if not ok:
+        return False, str(err or "")[:300]
+    if group:
+        # The read loop names a group from its own thread table (refreshed every few minutes): without this the next
+        # message there would still carry the old name.
+        zalo_personal_channel.note_thread_name(str(conn.get("id") or ""), str(chat_id), str(name))
+    else:
+        zalo_personal_channel.note_alias(str(conn.get("id") or ""), str(chat_id), str(name))
+    return True, ""
+
+
 async def gui_anh(tk: dict, chat_id: str, paths, chat_type: str = "private"):
     """Send images the bot asked for (0.84.3), after its text. `(ok, error)`.
 
@@ -963,6 +993,12 @@ class Transport:
         }
         if is_reaction:
             meta["reaction"] = True
+        # Text of the message this one quotes (2026-11-26): a staff member replying to the bot's question names its
+        # request code there (staff_requests.pick). A quoted photo carries a JSON payload, not words: left out.
+        rt = md0.get("replyTo") if isinstance(md0.get("replyTo"), dict) else {}
+        quoted = str(rt.get("text") or rt.get("msg") or "").strip()
+        if quoted and not quoted.startswith("{"):
+            meta["reply_to_text"] = quoted[:1000]
         # Labels the owner put on this chat in the Zalo app (0.281.0, javis-zalo 1.6.0): the bot can skip chats tagged
         # e.g. "Gia đình" (`chatbot_runtime._ly_do_im`) and sees the tags in its prompt. Cached per connection, so this
         # await costs nothing on most messages; any failure leaves the list empty and the turn runs as before.

@@ -224,6 +224,9 @@
   const liteMode = () => !graphEnabled;
 
   const esc = (s) => (s || "").toString().replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&#39;");
+  // After an automatic rollback the updater keeps the failed start's error line (updater.record_startup_failure), so the
+  // screen says why instead of only "the new version failed" (Python 3.15, 27/11/2026).
+  const _updCause = (st) => (st && st.cause ? " " + esc(window.t("cs.upd_rb_cause")) + " <code>" + esc(st.cause) + "</code>." : "");
   // (i) button (info-tip.js, 0.214.0): long explanations hide behind it. Without info-tip.js
   // (Node tests) the text is drawn open so nothing is lost.
   const _infoLabel = () => (typeof window.t === "function" ? window.t("info.more") : "i");
@@ -1392,7 +1395,7 @@
           const stash = state.state.stashed ? ic("package") + " " + window.t("cs.upd_stashed") : "";
           progress(phase, stash);
           if (result === "success") { clearInterval(poll); status.innerHTML = OK_ICON + " " + window.t("cs.upd_done_reload"); setTimeout(_taiLaiKhiSan, 1500); return; }
-          if (result === "rolled_back") { clearInterval(poll); window.__javisUpdating = false; status.innerHTML = "↩ " + window.t("cs.upd_rb_a") + " <b>" + window.t("cs.upd_rb_b") + "</b>."; update.disabled = false; return; }
+          if (result === "rolled_back") { clearInterval(poll); window.__javisUpdating = false; status.innerHTML = "↩ " + window.t("cs.upd_rb_a") + " <b>" + window.t("cs.upd_rb_b") + "</b>." + _updCause(state.state); update.disabled = false; return; }
           if (["pull_failed", "rollback_failed", "error"].includes(result)) {
             clearInterval(poll); window.__javisUpdating = false; q("updVerProgress").style.display = "none";
             status.innerHTML = WARN_ICON + " " + esc(state.state.error || window.t("cs.upd_err")) + " " + window.t("cs.upd_see") + " <code>update.log</code>."; update.disabled = false; return;
@@ -3163,7 +3166,7 @@
           const stashNote = s.state.stashed ? ic("package") + " " + window.t("cs.ov_stashed") : "";
           renderProgress(ph, stashNote);
           if (res === "success") { clearInterval(poll); st.innerHTML = OK_ICON + " " + esc(window.t("cs.upd_done_reload")); setTimeout(_taiLaiKhiSan, 1500); return; }
-          if (res === "rolled_back") { clearInterval(poll); window.__javisUpdating = false; renderProgress("done", stashNote); st.innerHTML = "↩ " + esc(window.t("cs.upd_rb_a")) + " <b>" + esc(window.t("cs.upd_rb_b")) + "</b>. " + esc(window.t("cs.upd_see")) + " <code>update.log</code>."; verUpd.disabled = false; return; }
+          if (res === "rolled_back") { clearInterval(poll); window.__javisUpdating = false; renderProgress("done", stashNote); st.innerHTML = "↩ " + esc(window.t("cs.upd_rb_a")) + " <b>" + esc(window.t("cs.upd_rb_b")) + "</b>." + _updCause(s.state) + " " + esc(window.t("cs.upd_see")) + " <code>update.log</code>."; verUpd.disabled = false; return; }
           if (res === "pull_failed" || res === "rollback_failed" || res === "error") {
             clearInterval(poll); window.__javisUpdating = false;
             const pb = document.getElementById("ovVerProgress"); if (pb) pb.style.display = "none";
@@ -3782,7 +3785,7 @@
       const pr = prof(p.id);
       return `<div class="ord-chips" data-p="${esc(p.id)}">
           <button type="button" class="mb-chip ord-mchip" data-ordpop="model" aria-expanded="false" title="${esc(t("models.change_model"))}">${ic("cpu")}<span class="ord-mtxt">${esc(pr.model || defName(p.id))}</span>${ic("chevron-up", { cls: "ord-up" })}</button>
-          ${effChip(p.id, pr.reasoning)}
+          ${p.id === "muse" ? "" : effChip(p.id, pr.reasoning)}
           ${ordBadges(p, ord)}
         </div>`;
     };
@@ -3892,6 +3895,7 @@
     const PLAN_TAG = { "openai-oauth": "models.tag_chatgpt", "grok-cli": "models.tag_xai", "antigravity-cli": "models.tag_google",
                        "anthropic-cli": "models.tag_claude" };
     const kindTag = (p) => {
+      if (p.id === "muse") return t("models.tag_muse");
       if (p.id === "anthropic-cli" && p.auth_mode === "api_key") return t("models.tag_api");
       if (PLAN_TAG[p.id]) return p.plan ? t("models.tag_plan", { goi: p.plan }) : t(PLAN_TAG[p.id]);
       if (isGw(p.id)) return t("models.tag_keys", { n: (accts[p.id] || []).length || (p.configured ? 1 : 0) });
@@ -3909,6 +3913,7 @@
           ${o.check ? `<button type="button" class="ord-act" ${o.check}="1">${ic("refresh-cw")}<span>${esc(t("models.check_short"))}</span></button>` : ""}
           ${o.add === "plan" ? `<button type="button" class="ord-act" data-addacc="${esc(p.id)}">${ic("user-plus")}<span>${esc(t("models.pacct_add"))}</span></button>` : ""}
           ${o.add === "key" ? `<button type="button" class="ord-act" data-addkey="${esc(p.id)}">${ic("plus")}<span>${esc(t("models.acct_add"))}</span></button>` : ""}
+          ${o.add === "muse" ? `<button type="button" class="ord-act" data-museadd="1">${ic("user-plus")}<span>${esc(t("models.pacct_add"))}</span></button>` : ""}
           ${canDisc ? `<button type="button" class="ord-act danger" data-disccard="${esc(p.id)}">${ic("log-out")}<span>${esc(t("models.disconnect"))}</span></button>` : ""}
         </div>`;
     };
@@ -3934,7 +3939,56 @@
       const head = p.tu_cai === "failed" ? t("models.cli_auto_failed", { ten }) : t("models.cli_install");
       return `<div class="prov-steps"><div>${esc(head)}<br><code>${esc(p.cai_lenh || "")}</code></div></div>`;
     };
+    // Muse (owner 26/11/2026): connected by pasting a Muse account's cookie, like a plan card has accounts. The
+    // accounts and their cookies live in Muse Gateway (server/muse.py), so the list comes from the gateway; one model,
+    // no Effort. Not connected: a name, the cookie, Connect, then "where is the cookie" and "gateway elsewhere" folded.
+    const MUSE_IC = { ready: "circle-check", rest: "circle-alert", off: "pause" };
+    const museRows = (list) => list.map(a => {
+      const cls = !a.enabled ? "off" : (a.error && !a.online) ? "rest" : "ready";
+      const st = cls === "off" ? t("models.acct_off") : cls === "rest" ? t("models.muse_acct_err") : t("models.acct_ready");
+      const name = a.label || t("models.muse_acct_n");
+      return `<li class="ord-acct${a.enabled ? "" : " off"}" data-muse-acct="${esc(a.id)}">
+          <span class="ord-ai">${ic("user")}</span>
+          <span class="ord-atxt"><span class="ord-aname">${esc(name)}</span>
+            <span class="ord-ast ${cls}">${ic(MUSE_IC[cls])}${esc(st)}</span></span>
+          <span class="ord-actl">
+            <button type="button" class="ord-ib" data-muse-menu="${esc(a.id)}" aria-haspopup="dialog" aria-label="${esc(t("models.acct_menu", { ten: name }))}">${ic("ellipsis")}</button>
+          </span>
+        </li>`;
+    }).join("");
+    const museForm = (p, mu) => `<div class="prov-action muse-form" style="flex-wrap:wrap">
+          <input class="js-input prov-acname" data-muse-f="label" maxlength="60" autocomplete="off" spellcheck="false" placeholder="${esc(t("models.acname_ph"))}">
+          <textarea class="js-input muse-cookie" data-muse-f="cookie" rows="3" autocomplete="off" spellcheck="false" placeholder="${esc(t("models.muse_cookie_ph"))}"></textarea>
+          <button class="gcard-btn" data-muse-connect="1">${esc(t("models.muse_connect"))}</button>
+          <span id="museMsg" class="gcard-meta" style="flex:1;min-width:200px"></span>
+        </div>
+        <details class="prov-help"><summary>${esc(t("models.muse_cookie_q"))}</summary>
+          <ol class="muse-steps"><li>${esc(t("models.muse_step1"))}</li><li>${esc(t("models.muse_step2"))}</li>
+            <li>${esc(t("models.muse_step3"))}</li><li>${esc(t("models.muse_step4"))}</li></ol></details>
+        <details class="prov-help"${mu.ok === false ? " open" : ""}><summary>${esc(t("models.muse_gw_q"))}</summary>
+          <div class="muse-gw">
+            <input class="js-input" data-muse-f="base" inputmode="url" autocomplete="off" spellcheck="false" placeholder="${esc(t("models.muse_base_ph"))}" value="${esc(p.muse_base || "")}">
+            <input class="js-input" data-muse-f="key" type="password" autocomplete="off" placeholder="${esc(t(mu.key_from === "page" ? "models.muse_key_keep" : "models.muse_key_ph"))}">
+            <div class="gcard-meta">${esc(t("models.muse_gw_note"))}</div>
+          </div></details>`;
+    const museCard = (p, ord) => {
+      const mu = p.muse || {};
+      const on = !!p.configured;
+      const list = mu.accounts || [];
+      const ok = list.filter(a => a.enabled && !(a.error && !a.online)).length;
+      const st = on ? t("models.st_connected") + (list.length ? " · " + t("models.pacct_keys", { ok, n: list.length }) : "")
+        : t("models.st_not_connected");
+      return `${cardOpen(p, ord)}
+          ${provHead(p, on, "", st, true, ord)}
+          ${infoBody(esc(t("models.muse_note")))}
+          ${mu.ok === false ? `<div class="prov-note warn"><div>${WARN_ICON} <b>${esc(t("models.muse_gw_down"))}</b></div><div>${esc(mu.error || "")}</div></div>` : ""}
+          ${on && ord && list.length ? `<ol class="ord-accts" data-p="muse">${museRows(list)}</ol>` : ""}
+          ${ordActs(p, ord, { add: on && ord ? "muse" : "" })}
+          ${on && ord ? "" : museForm(p, mu)}
+        </div>`;
+    };
     const provCard = (p, ord) => {
+      if (p.id === "muse") return museCard(p, ord);
       const on = p.configured;
       // Máy thiếu binary CLI thì nói TẠI ĐÂY, đừng để user đăng nhập xanh rồi vào chat mới
       // vỡ (báo cáo 16/08: người mới cài "kết nối được nhưng không sử dụng được").
@@ -4193,7 +4247,7 @@
               <div class="aux-now-prov">${esc(bgAuto ? bgAutoSub : (bgP.label || bgCfg.provider))}</div>
             </div>
             <div class="aux-now-act ord-chips" data-p="__bg">
-              ${effChip("__bg", bgCfg.reasoning)}
+              ${bgCfg.provider === "muse" ? "" : effChip("__bg", bgCfg.reasoning)}
               <button type="button" class="gcard-btn" id="auxChange" aria-expanded="false">${esc(t("models.change_model"))}</button>
             </div>
           </div>
@@ -4347,6 +4401,36 @@
       if (msg) msg.innerHTML = Icons.warn((r && r.error) || t("models.not_works"));
       setTimeout(() => renderModelsCloudTab(el), 1500);
     };
+    // ---- Muse: one account from a pasted cookie (the gateway checks it live) ----
+    const mcn = el.querySelector("[data-muse-connect]");
+    if (mcn) mcn.onclick = async () => {
+      const box = (k) => el.querySelector(`[data-muse-f="${k}"]`);
+      const val = (k) => ((box(k) || {}).value || "").trim();
+      const msg = el.querySelector("#museMsg");
+      const muP = providers.find(p => p.id === "muse") || {};
+      if (!val("cookie") && !((muP.muse || {}).accounts || []).length) {
+        if (box("cookie")) box("cookie").focus();
+        if (msg) msg.innerHTML = Icons.warn(t("models.muse_need_cookie"));
+        return;
+      }
+      mcn.disabled = true; const cu = mcn.textContent; mcn.textContent = t("models.trying");
+      if (msg) msg.textContent = t("models.muse_testing");
+      const r = await postJson("/provider/muse/connect", { label: val("label"), cookie: val("cookie"),
+        base: val("base"), key: val("key") }, 180000);
+      mcn.disabled = false; mcn.textContent = cu;
+      if (!r || !r.ok) { if (msg) msg.innerHTML = Icons.warn((r && r.error) || t("app.err_cap")); return; }
+      _daHoiModel.delete("muse");
+      if (r.warn && window.JavisToast) window.JavisToast(r.warn);
+      renderModelsCloudTab(el);
+    };
+    // The card draws the gateway's accounts from a short-lived copy on the server; when there is none yet, ask once
+    // for a fresh one and draw again.
+    const museP = providers.find(p => p.id === "muse");
+    if (museP && museP.muse && museP.muse.checking && !el._museAsked) {
+      el._museAsked = true;
+      fetch("/provider/muse/status").then(r => r.json()).then(() => { if (el.isConnected) renderModelsCloudTab(el); })
+        .catch(() => {});
+    } else if (museP && museP.muse && !museP.muse.checking) el._museAsked = false;
     // ---- Grok Build CLI: đăng nhập device code ngay trên trang ----
     const gkl = el.querySelector("[data-groklogin]");
     if (gkl) gkl.onclick = async () => {
@@ -4715,6 +4799,57 @@
     }, t("models.acct_add_note"));
     el.querySelectorAll("[data-addkey]").forEach(b => b.onclick = () => (isGw(b.dataset.addkey)
       ? advSheet(b, null, b.dataset.addkey) : addKeySheet(b, b.dataset.addkey)));
+
+    // ---- Muse: the accounts live in Muse Gateway, every change goes through the /provider/muse/ routes ----
+    const museInfo = () => cardOf("muse").muse || {};
+    const musePost = (url, body) => postJson(url, body, 180000);
+    const museAddSheet = (btn) => formSheet(btn, t("models.pacct_add"), "Muse", [
+      { f: "label", ph: t("models.acname_ph") },
+      { f: "cookie", ph: t("models.muse_cookie_ph"), type: "password" },
+    ], t("models.muse_connect_short"), async (v, box) => {
+      if (!v("cookie")) return need(box, "cookie");
+      const r = await musePost("/provider/muse/account", { op: "add", label: v("label"), cookie: v("cookie") });
+      if (!r || !r.ok) return (r && r.error) || t("app.err_cap");
+      setTimeout(c.again, 0);
+      return r.warn || undefined;
+    }, t("models.muse_add_note"));
+    const museGwSheet = (btn) => formSheet(btn, t("models.muse_gw_t"), museInfo().base || "", [
+      { f: "base", ph: t("models.muse_base_ph"), mode: "url", value: cardOf("muse").muse_base || "" },
+      { f: "key", ph: t(museInfo().key_from === "page" ? "models.muse_key_keep" : "models.muse_key_ph"), type: "password" },
+    ], t("common.save"), async (v) => {
+      const r = await musePost("/provider/muse/gateway", { base: v("base"), key: v("key") });
+      if (!r || !r.ok) return (r && r.error) || t("app.err_cap");
+      setTimeout(c.again, 0);
+    }, t("models.muse_gw_note"));
+    const museCookieSheet = (btn, a) => formSheet(btn, t("models.muse_recookie"), a.label || "Muse", [
+      { f: "cookie", ph: t("models.muse_cookie_ph"), type: "password" },
+    ], t("common.save"), async (v, box) => {
+      if (!v("cookie")) return need(box, "cookie");
+      const r = await musePost("/provider/muse/account", { op: "cookie", id: a.id, cookie: v("cookie") });
+      if (!r || !r.ok) return (r && r.error) || t("app.err_cap");
+      setTimeout(c.again, 0);
+      return r.warn || undefined;
+    });
+    el.querySelectorAll("[data-museadd]").forEach(b => b.onclick = () => museAddSheet(b));
+    el.querySelectorAll("[data-muse-menu]").forEach(b => b.onclick = () => {
+      const list = museInfo().accounts || [];
+      const a = list.find(x => x.id === b.dataset.museMenu) || { id: b.dataset.museMenu };
+      const name = a.label || t("models.muse_acct_n");
+      const act = async (body) => {
+        const r = await musePost("/provider/muse/account", Object.assign({ id: a.id }, body));
+        if ((!r || !r.ok) && window.JavisToast) window.JavisToast((r && r.error) || t("app.err_cap"));
+        c.again();
+      };
+      menuSheet(b, name, [[
+        { ic: a.enabled ? "pause" : "play", label: t(a.enabled ? "models.acct_disable" : "models.acct_enable"),
+          sub: a.enabled ? t("models.muse_off_d") : "", run: () => act({ op: a.enabled ? "off" : "on" }) },
+        { ic: "cookie", label: t("models.muse_recookie"), sub: a.error || t("models.muse_recookie_d"), run: () => museCookieSheet(b, a) },
+      ], [
+        { ic: "trash-2", label: t("models.acct_rm"), danger: true, run: () => confirmSheet(b, t("models.rm_t", { ten: name }),
+          t(list.length > 1 ? "models.muse_rm_q" : "models.muse_rm_last_q", { ten: name }), t("models.acct_rm"), "trash-2",
+          () => act({ op: "remove" })) },
+      ]], a.error || "");
+    });
 
     // ---- A gateway card (OpenAI Compatible or Claude Compatible): one gateway
     // = a name, an address, a key and (for a seller that lists none) model names. The server checks the address and
@@ -5217,6 +5352,8 @@
          i > 1 && { ic: "arrow-up", label: t("models.move_up"), run: () => save({ order: MO.move(c.order, i, i - 1) }) },
          i >= 0 && i < n - 1 && { ic: "arrow-down", label: t("models.move_down"), run: () => save({ order: MO.move(c.order, i, i + 1) }) }],
         [q("[data-addkey]") && { ic: "key-round", label: t("models.acct_add"), sub: t("models.acct_add_d"), run: () => (isGw(pid) ? advSheet(b, null, pid) : addKeySheet(b, pid)) },
+         q("[data-museadd]") && { ic: "user-plus", label: t("models.pacct_add"), sub: t("models.muse_add_note"), run: () => museAddSheet(b) },
+         pid === "muse" && { ic: "plug-zap", label: t("models.muse_gw_t"), sub: museInfo().base || "", run: () => museGwSheet(b) },
          q("[data-addacc]") && { ic: "user-plus", label: t("models.pacct_add"), sub: t("models.pacct_add_d"), run: () => planSheet(b, pid) },
          // A plan card with one account has no list to rename it from: its name is edited here.
          PLAN_CLI.indexOf(pid) >= 0 && (c.accts[pid] || []).length < 2 && !(pid === "anthropic-cli" && p.auth_mode === "api_key")
@@ -5430,10 +5567,17 @@
       const warn = !!tk.expires_at && (tk.expired || (tk.days_left || 0) <= 14);
       const when = !tk.expires_at ? "" : tk.expired ? t("models.tok_expired")
         : t("models.tok_until", { ngay: day, n: Math.max(0, tk.days_left || 0) });
+      // 2026-11-26: a token cannot load the connectors added on claude.ai (Gmail, Calendar, Drive...); the machine's
+      // own claude.ai sign-in can. With one, turns run on it and the token is the backup; without, one button signs in.
+      const conn = d.auth_connectors === true;
+      const connRow = d.auth_connectors === undefined ? "" : `<div class="prov-tok-row${conn ? "" : " warn"}">${ic(conn ? "plug" : "unplug")}
+          <span>${esc(t(conn ? "models.conn_on" : "models.conn_off"))}</span></div>`;
       return `<div class="prov-tok-row${warn ? " warn" : ""}">${ic(warn ? "triangle-alert" : "key-round")}
           <span>${esc(t("models.tok_saved", { tail: tk.tail || "" }))}${when ? " · " + esc(when) : ""}</span>${infoBtn()}</div>
+        ${connRow}
         ${help}
         <div class="prov-action">
+          ${conn || d.auth_connectors === undefined ? "" : `<button class="gcard-btn" type="button" data-conn-login="1">${esc(t("models.conn_btn"))}</button>`}
           ${auto ? `<button class="gcard-btn${warn ? "" : " ghost"}" type="button" data-tok-get="1">${esc(t("models.tok_new"))}</button>` : ""}
           ${pasteBtn}${disc}
         </div>
@@ -5504,18 +5648,30 @@
       try { await savePlanName("anthropic-cli", name); } catch (e) {}
       startClaudeToken(el, box);
     };
+    const connBtn = box.querySelector("[data-conn-login]");
+    if (connBtn) connBtn.onclick = () => startClaudeToken(el, box, "login");
   }
 
-  async function startClaudeToken(el, box) {
+  // `flow`: "token" runs `claude setup-token` (a one-year token); "login" runs `claude auth login` (2026-11-26), the
+  // full claude.ai sign-in that carries the connectors, kept next to the token as its first choice.
+  const CLAUDE_FLOWS = {
+    token: { start: "/claude/token/start", poll: "/claude/token/poll", code: "/claude/token/code", s1: "models.tok_s1",
+             done: (d) => !!(d && d.token) },
+    login: { start: "/claude/login-start", poll: "/claude/login-poll", code: "/claude/login-code", s1: "models.conn_s1",
+             done: (d) => !!(d && d.connected) },
+  };
+
+  async function startClaudeToken(el, box, flow) {
+    const F = CLAUDE_FLOWS[flow] || CLAUDE_FLOWS.token;
     const m0 = box.querySelector("#cliTokMsg");
     if (m0) m0.textContent = t("models.getting_link");
     let r;
-    try { r = await (await fetch("/claude/token/start", { method: "POST" })).json(); }
+    try { r = await (await fetch(F.start, { method: "POST" })).json(); }
     catch (e) { if (m0) m0.textContent = t("common.net_err"); return; }
     if (!r || !r.ok) { if (m0) m0.innerHTML = Icons.warn((r && r.error) || t("models.cant_start")); return; }
     box.innerHTML = `
       <div class="prov-note" style="line-height:1.7">
-        <b>1)</b> ${esc(t("models.tok_s1"))}<br>
+        <b>1)</b> ${esc(t(F.s1))}<br>
         <a href="${esc(safeHref(r.url))}" target="_blank" rel="noopener" style="color:var(--link-ink);word-break:break-all">${esc(r.url || t("models.no_link"))}</a><br>
         <b>2)</b> ${esc(t("models.cli_s2"))}
         <div class="gcard-meta">${esc(t("models.cli_s2_nocode"))}</div>
@@ -5541,10 +5697,10 @@
       clearTimeout(timer);
       if (!el.isConnected || Date.now() - t0 > 15 * 60 * 1000) { stop(); return; }
       busy = true;
-      let d = null; try { d = await (await fetch("/claude/token/poll")).json(); } catch (e) {}
+      let d = null; try { d = await (await fetch(F.poll)).json(); } catch (e) {}
       busy = false;
       if (stopped) return;
-      if (d && d.token) { stop(); renderModelsCloudTab(el); return; }
+      if (F.done(d)) { stop(); renderModelsCloudTab(el); return; }
       if (d && d.ended) { stop(); if (m2) m2.innerHTML = Icons.warn(d.error || t("models.login_incomplete")); return; }
       timer = setTimeout(poll, 2500);
     };
@@ -5563,7 +5719,7 @@
       cb.disabled = true;
       const fd = new FormData(); fd.append("code", code);
       let rr;
-      try { rr = await (await fetch("/claude/token/code", { method: "POST", body: fd })).json(); }
+      try { rr = await (await fetch(F.code, { method: "POST", body: fd })).json(); }
       catch (e) { cb.disabled = false; if (m2) m2.textContent = t("common.net_err"); return; }
       cb.disabled = false;
       if (rr && rr.ok) { stop(); renderModelsCloudTab(el); return; }
@@ -5572,7 +5728,7 @@
         m2.innerHTML = Icons.warn((rr && rr.error) || t("models.code_wrong"))
           + `<div class="prov-action"><button class="gcard-btn ghost" type="button" data-tok-again="1">${esc(t("models.tok_again"))}</button></div>`;
         const again = m2.querySelector("[data-tok-again]");
-        if (again) again.onclick = () => { stop(); startClaudeToken(el, box); };
+        if (again) again.onclick = () => { stop(); startClaudeToken(el, box, flow); };
       }
     };
   }
@@ -5994,10 +6150,9 @@
     return i && typeof i.catLabel === "function" ? i.catLabel(x) : (x || "");
   }
 
-  // ── Nhóm connector (khối B): mọi dịch vụ Google gom về MỘT card, bấm vào chọn dịch vụ ──
+  // ── Nhóm connector (khối B): một card mở bảng chọn dịch vụ. Google không còn gom ở đây (chủ, 27/11/2026): một
+  //    thẻ Google Workspace chính chủ bấm là nối, các dịch vụ Google khác đứng riêng như mọi thẻ khác. ──
   const GROUP_META = {
-    google: { name: "Google", icon: '<span class="gico">G</span>', category: "Văn phòng",
-              desc_key: "cs.cn_g_google" },
     // Built in since 2026-11-05 (owner: a default connection next to GitHub): two ways in, token or web sign-in.
     // No category here: the card takes its members' category from the catalog, so the filter chip matches it.
     cloudflare: { name: "Cloudflare", icon: iconInner({ icon: "/static/logos/cloudflare.jpg" }), desc_key: "cs.cn_g_cloudflare" },
@@ -6708,10 +6863,13 @@
     el.innerHTML = `<div class="pg-loading pg-page">${esc(t("common.loading"))}</div>`;
     let d;
     try { d = await (await fetch("/connect/catalog")).json(); } catch (e) { el.innerHTML = placeholder("mcp", window.t("cs.cn_load_err")); return; }
-    const cat = d.catalog || [];
     const conns = d.connections || [];
     const byId = {};
-    cat.forEach(c => byId[c.id] = c);
+    (d.catalog || []).forEach(c => byId[c.id] = c);
+    // A card another card replaces is offered only to someone who already has a connection of it (2026-11-27: the
+    // community Google Workspace card and the single Gmail / Calendar cards gave way to Google's official one).
+    // `byId` keeps every card, so existing connections still render with their own name and settings.
+    const cat = (d.catalog || []).filter(c => !c.replaced_by || conns.some(x => x.connector_id === c.id));
     byId.custom = { id: "custom", name: window.t("cs.cn_custom_name"), icon: "star", category: "Khác",
                     description: window.t("cs.cn_custom_desc"), auth_type: "apikey" };
     const st = await freshSettings();
@@ -6721,7 +6879,7 @@
     // native, bốn provider API đi qua vòng gọi tool + hub trong _api_stream_mcp. Gemini từng
     // thiếu trong danh sách này nên khách chạy Gemini bị banner vàng "chưa hỗ trợ gọi công cụ"
     // dù bên dưới đã chạy MCP ngon - nhánh vàng giờ chỉ còn để chặn provider lạ.
-    const MCP_PROVIDERS = ["anthropic-cli", "openrouter", "openai", "anthropic-api", "gemini", "groq", "deepseek", "ollama", "ollama-local", "openai-compat", "anthropic-compat"];
+    const MCP_PROVIDERS = ["anthropic-cli", "openrouter", "openai", "anthropic-api", "gemini", "groq", "deepseek", "ollama", "ollama-local", "openai-compat", "anthropic-compat", "muse"];
     const mainLabel = (provs.find(p => p.id === main.provider) || {}).label || main.provider || "-";
     let warn = "";
     // Only a problem is worth a banner here. The green "your engine uses the Connections store"
@@ -7319,18 +7477,12 @@
   }
 
   // ---- Trang Kênh Admin (0.85.0): mỗi kênh một tab ----
-  // Kênh ADMIN là đường CHỦ nói chuyện với Javis qua app chat, đủ quyền như dashboard. Bot trả lời
-  // KHÁCH nằm ở trang Chatbot, và tên trang nói rõ điều đó vì hai thứ từng bị nhầm.
-  //
-  // Mỗi tab cùng một khuôn, và khuôn đó sửa đúng chỗ người dùng vấp ở bản cũ:
-  //   - Đầu tab là CÔNG TẮC Bật/Tắt có tác dụng ngay. Bản cũ là một ô checkbox phải nhớ bấm Lưu
-  //     mới ăn, trong khi nút bên dưới lại ghi "Lưu & bật": bỏ tích rồi bấm "Lưu & bật" thì kênh
-  //     TẮT. Hai điều khiển nói hai ý ngược nhau.
-  //   - Trạng thái (nhãn màu + một câu nói việc cần làm tiếp) đứng ngay dưới tên kênh, không nằm
-  //     lọt thỏm dưới hai nút như trước.
-  //   - Hai bước đánh số: 1. Kết nối, 2. Ai được dùng. Nút Lưu ở CUỐI, ghi đúng việc nó làm
-  //     ("Lưu và bật kênh" khi đang tắt, "Lưu thay đổi" khi đang chạy).
-  // Một cột, nút xuống cuối: trang cài đặt phải đọc được trên điện thoại.
+  // Admin channels: the OWNER talks to Javis from a chat app, with dashboard rights. Bots answering CUSTOMERS live on
+  // the Chatbot page (the two were confused once). Every tab, one shape, fixing what tripped people before:
+  //   - an On/Off SWITCH at the top acting at once (the old tick needed Save, next to a "Save & enable" button);
+  //   - the status (coloured label + the next thing to do) right under the channel name;
+  //   - two numbered steps, 1. Connect, 2. Who may use it; Save at the END, saying what it does.
+  // One column, buttons last: a settings page must read on a phone.
   const ADMIN_CH = [
     { key: "telegram", set: "telegram", api: "/telegram", title: "Telegram",
       fields: [["token", true, "123456:ABC..."]], allowKey: "chat_id", openAllow: true },
@@ -7420,7 +7572,14 @@
             ${Icons.kenh(c.key, { size: "18px" })}<span>${esc(c.tab || c.title)}</span><i class="ach-dot st-${state[c.key].state}" aria-hidden="true"></i></button>`).join("")}
         </div>
         <section id="ach-panel" class="ach-panel" role="tabpanel" tabindex="0"></section>
+        <div class="ach-opt"><label for="achTrace"><input type="checkbox" id="achTrace"${(s.chat || {}).tool_trace === false ? "" : " checked"}> ${esc(t("ach.tool_trace"))}</label>${infoBtn()}</div>
+        ${infoBody(esc(t("ach.tool_trace_h")))}
       </div>`;
+    el.querySelector("#achTrace").onchange = async (e) => {   // #1893
+      const c = e.target, ok = (await saveSetting("chat", { tool_trace: c.checked })).ok;
+      if (!ok) c.checked = !c.checked;
+      toast(t(ok ? "ach.tool_trace_saved" : "ach.tool_trace_fail"), !ok);
+    };
     const go = el.querySelector("[data-ach-go]");
     if (go) go.onclick = (e) => { e.preventDefault(); navigateTo("chatbots"); };
     const keys = ADMIN_CH.map(c => c.key);
@@ -8346,6 +8505,8 @@
     const gen = _renderGen;
     const $ = (id) => document.getElementById(id);
     if (!$("voiceCard")) return;
+    // Mic and speaker lists (audio-devices.js): names appear once the mic is allowed, so read them again here.
+    try { if (window.JavisAudioDevices) window.JavisAudioDevices.refresh(); } catch (e) {}
     let o = null;
     try { o = await (await fetch("/voice/options?brains=0", { cache: "no-store" })).json(); } catch (e) { o = null; }
     if (gen !== _renderGen) return;

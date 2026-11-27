@@ -11,6 +11,8 @@ Data it owns (all under settings["model"]):
     accounts         {provider: [{"id", "label", "enabled"}]} order of accounts / keys in a card
     account_keys     {account_id: key}                        encrypted at rest ("model.account_keys.*")
     telegram_chats   {chat_key: {"provider", "model"}}        a pin set by /model inside that chat
+    agent_chats      {"<brain>|<slug>": {"provider", "model", "reasoning"}} an assistant's chat pins (model, thinking
+                     level), set from the chips of a chat with it; each part on its own
     routing_version  1
 
 Legacy fields stay in sync so the ~150 places that read them keep working: `main` always mirrors
@@ -415,6 +417,68 @@ def set_telegram_pin(m: dict, chat_key: str, provider: str, model: str = "") -> 
         chats[k] = {"provider": provider, "model": model or ""}
     else:
         chats.pop(k, None)
+
+
+# ---------------------------------------------------------------- an assistant's chat pin
+
+def agent_chat_key(brain_key: str, slug: str) -> str:
+    """Key of one assistant in `agent_chats`: its brain (the normalised key the session store writes) and its slug."""
+    return f"{str(brain_key or '').strip()}|{str(slug or '').strip()}"
+
+
+def agent_chat_pin(m: dict, key: str) -> dict:
+    """{'provider','model'} the owner pinned for chatting with one assistant, or {} when none (owner, 26/11/2026).
+
+    Picked in the model chip of a chat with that assistant. It covers that assistant's chats only: its background work
+    (Kanban jobs, reminders, loops, team turns, workflow steps, a dedicated bot) keeps the model in its settings."""
+    p = (((m or {}).get("agent_chats") or {}).get(str(key or "")) or {})
+    if not isinstance(p, dict) or not str(p.get("provider") or "").strip():
+        return {}
+    return {"provider": str(p["provider"]).strip(), "model": str(p.get("model") or "").strip()}
+
+
+def agent_chat_reasoning(m: dict, key: str) -> str:
+    """The thinking level the owner pinned for chatting with one assistant, or "" when none (owner, 27/11/2026: "làm
+    thêm ghim mức suy nghĩ theo trợ lý"). Set from the effort chip of a chat with it; background work keeps the level
+    in the assistant's settings."""
+    p = (((m or {}).get("agent_chats") or {}).get(str(key or "")) or {})
+    lv = str(p.get("reasoning") or "").strip() if isinstance(p, dict) else ""
+    return lv if lv in LEVELS else ""
+
+
+def _agent_chat_entry(m: dict, key: str) -> tuple:
+    pins = m.get("agent_chats")
+    if not isinstance(pins, dict):
+        pins = m["agent_chats"] = {}
+    k = str(key or "")
+    entry = pins.get(k)
+    return pins, k, (dict(entry) if isinstance(entry, dict) else {})
+
+
+def _store_agent_chat_entry(pins: dict, k: str, entry: dict) -> None:
+    entry = {f: v for f, v in entry.items() if v}
+    if entry.get("provider") or entry.get("reasoning"):
+        pins[k] = entry
+    else:
+        pins.pop(k, None)
+
+
+def set_agent_chat_pin(m: dict, key: str, provider: str, model: str = "") -> None:
+    """Set or clear (empty provider) one assistant's chat model pin in the `model` section `m`. Its thinking level
+    pin stays as it is."""
+    pins, k, entry = _agent_chat_entry(m, key)
+    prov = str(provider or "").strip()
+    entry["provider"] = prov
+    entry["model"] = str(model or "").strip() if prov else ""
+    _store_agent_chat_entry(pins, k, entry)
+
+
+def set_agent_chat_reasoning(m: dict, key: str, level: str) -> None:
+    """Set or clear ("" or an unknown level) one assistant's chat thinking level pin. Its model pin stays."""
+    pins, k, entry = _agent_chat_entry(m, key)
+    lv = str(level or "").strip()
+    entry["reasoning"] = lv if lv in LEVELS else ""
+    _store_agent_chat_entry(pins, k, entry)
 
 
 # ---------------------------------------------------------------- migration

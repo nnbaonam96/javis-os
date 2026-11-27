@@ -42,8 +42,12 @@ import mcp_store
 import once_ledger
 import turn_ledger
 import scout
+import agent_recall   # javis_recall: an assistant's memory searched instead of preloaded (2026-11-27)
 import code_mode
+import delivery_ledger   # issues #1846, #1851: what a tool delivered is not sent again
 import secret_guard
+import main_prompt_rendering   # the router's fixed skill order, shared with the system prompt
+import skill_finder      # 2026-11-27: find a skill by its whole description (search, suggestions, learning)
 import skill_router
 import skill_usage
 import team_gate
@@ -507,7 +511,9 @@ def _guard(ent, fn, mode):
     """Bọc 1 route entry MCP thành async call có kiểm quyền + audit."""
     conn = ent["conn"]
     tool = ent["tool"]
-    connector = mcp_catalog.for_connection(conn)
+    # Issue #1865: a server that enforces read-only itself (Supabase with read_only=true) may run a plain SELECT.
+    connector = mcp_catalog.with_server_read_only(mcp_catalog.for_connection(conn),
+                                                  {"url": (ent.get("spec") or {}).get("url") or conn.get("url")})
 
     async def _call(args):
         cls = mcp_catalog.classify(connector, tool, args)
@@ -556,6 +562,8 @@ def _guard(ent, fn, mode):
             # 0.238.0: a Kanban job that runs again must not send, post or order twice (once_ledger.py).
             # Outside a background job this calls straight through.
             result = await once_ledger.run(fn, args, _send)
+            # Issues #1846, #1851: what this call delivered to a chat is not sent there again by the end of the turn.
+            delivery_ledger.note_call(args, result)
         _audit_append({"ts": datetime.now().isoformat(timespec="seconds"), "conn_id": conn["id"],
                        "connector": conn.get("connector_id"), "label": conn.get("label"),
                        "tool": tool, "mode": mode, "cls": cls,
@@ -1030,6 +1038,27 @@ def _list_skills(vault_root):
     return skill_router.enabled_slugs(vault_root)
 
 
+# Characters of slugs javis_use_skill's own description names (about 60 skills); the rest are counted and found
+# with find=. The system prompt's router names up to skill_router.SKILL_LIST_CHAR_BUDGET.
+SKILL_TOOL_NAMES_CHARS = 1500
+SKILL_SEARCH_LIMIT = 5
+
+
+def _skill_search_text(vault_root, query: str, lang: str = "") -> str:
+    """The answer of javis_use_skill(find=...) and of a wrong name: the skills that fit a job best, each with its
+    whole description (skill_finder.search). Blocking: call it in a thread."""
+    hits = skill_finder.search(vault_root, query, limit=SKILL_SEARCH_LIMIT, lang=lang)
+    if not hits:
+        names = ", ".join(_list_skills(vault_root)) or "(none yet)"
+        return (f"No skill matches '{query}'. Enabled skills: {names}. If none of them fits, do the job without "
+                "a skill.")
+    lines = [f"Skills for '{query}', best first. Load one with javis_use_skill(name=<slug>) only if it fits:"]
+    for h in hits:
+        label = " · ".join(x for x in (h["name"] if h["name"] != h["slug"] else "", h["group"]) if x)
+        lines.append(f"- `{h['slug']}`" + (f" ({label})" if label else "") + f": {h['description'] or '(no description)'}")
+    return "\n".join(lines)
+
+
 def _rel_trong_goc(p, vault_root, workspace_root):
     """Path of `p` relative to the brain or a working folder, or None when it sits in neither."""
     goc = [vault_root] + list(workspace_root if isinstance(workspace_root, (list, tuple)) else
@@ -1353,6 +1382,11 @@ def _builtin_tools(mode, vault_root, include_ambient=False, hidden=None, lang=""
 
     async def _skill(args):
         name = str((args or {}).get("name") or "").strip()
+        find = str((args or {}).get("find") or "").strip()
+        if find or not name:
+            if not find:
+                return "ERROR: pass name=<slug> to load a skill, or find=<the job, a few words> to search for one."
+            return await asyncio.to_thread(_skill_search_text, vault_root, find, lang)
         # 2026-11-18 (section_select): a long skill built as a menu loads the parts this task needs; `section` and
         # `full` fetch more. Every doubt loads the whole skill, as before.
         want_section = str((args or {}).get("section") or "").strip()
@@ -1373,8 +1407,10 @@ def _builtin_tools(mode, vault_root, include_ambient=False, hidden=None, lang=""
         except (ScopeUnavailable, AssetUnavailable, OSError, sqlite3.Error):
             return 'ERROR: task_skill_scope_unavailable'
         if asset is None:
-            return ("ERROR: không có skill đó. Skill khả dụng: "
-                    + (", ".join(_list_skills(vault_root)) or "(chưa có)"))
+            # A wrong or half-remembered slug: answer with the skills closest to it, by name and by what it says,
+            # rather than the bare list of every slug.
+            near = await asyncio.to_thread(_skill_search_text, vault_root, name.replace("-", " "), lang)
+            return (f"ERROR: no enabled skill is named '{name}'. " + near)
         base = _skill_base_line(vault_root, asset)
         text = base + asset.text[:60_000]
         _sess = section_select.session_key()
@@ -1399,6 +1435,10 @@ def _builtin_tools(mode, vault_root, include_ambient=False, hidden=None, lang=""
         # loop (WebSocket/telegram poller/loop scheduler đều chạy chung loop này).
         # bump tự nuốt lỗi → sidecar hỏng không bao giờ làm gãy việc nạp skill.
         await asyncio.to_thread(skill_usage.bump, vault_root, asset.slug)
+        # Skill routing learns from what was loaded after what was suggested (skill_finder): a hit counts for the
+        # suggestion, a miss teaches the skill this turn's request. Owner turns only (session_key is "" otherwise).
+        if _sess:
+            await asyncio.to_thread(skill_finder.note_load, vault_root, asset.slug, _sess)
         try:  # 0.341.0: automatic learning remembers which skill this chat turn used
             import auto_learning
             _turn = turn_context.current() or {}
@@ -1465,28 +1505,27 @@ def _builtin_tools(mode, vault_root, include_ambient=False, hidden=None, lang=""
         {"url": {"type": "string"}, "offset": {"type": "integer"},
          "limit": {"type": "integer", "description": "số ký tự, mặc định 15000, tối đa 50000"}},
         ["url"], _web_fetch)
-    # Mô tả tool = router thu nhỏ: liệt kê slug + mô tả ngắn để engine biết KHI NÀO gọi skill nào.
-    # Trần lấy từ skill_router (CHUNG với system prompt) - trước đây hub tự cắt 60, system prompt
-    # cắt 100 - người viết skill không biết mình bị chấm theo thước nào.
-    # Xếp theo mức hay dùng TRƯỚC khi cắt, rồi cắt theo cả số mục lẫn ngân sách ký tự. Cắt
-    # theo thứ tự thư mục (tức bảng chữ cái) như bản trước là để skill tên vần cuối biến mất
-    # khỏi đây trong im lặng - cùng lỗi với `main._skill_router_block`, và phải chữa ở CẢ HAI
-    # chỗ vì hai nơi này là hai bề mặt khác nhau model nhìn thấy.
+    # The tool names every skill by slug (2026-11-27), like the system prompt's router, and searches them all by
+    # their WHOLE description with find=. It no longer carries the descriptions: cut at 150 characters for 40 skills
+    # at most, that list hid half of a grown brain's skills and most of what each one does (skill_finder docstring).
     metas = skill_router.list_enabled_meta(vault_root, lang)
-    _hien, _con_lai = skill_router.cat_theo_ngan_sach(
-        skill_router.xep_theo_uu_tien(metas, vault_root))
-    listing = "; ".join(f"{s['slug']}: {(s['description'] or '')[:skill_router.SKILL_DESC_MAX]}"
-                        for s in _hien)
-    if _con_lai > 0:
-        listing += (f"; …(+{_con_lai} skill nữa không liệt kê ở đây, vẫn nạp được bằng "
-                    f"name=<slug> nếu biết tên - xem Javis/index.md)")
+    _names, _used, _left = [], 0, 0
+    for _m in main_prompt_rendering.skill_router_order(metas):
+        _slug = str(_m.get("slug") or "")
+        if _used + len(_slug) + 2 > SKILL_TOOL_NAMES_CHARS:
+            _left += 1
+            continue
+        _names.append(_slug)
+        _used += len(_slug) + 2
+    listing = ", ".join(_names) + (f" (+{_left} more: find= searches them)" if _left else "")
     add("javis_use_skill",
         "Load a skill (in-depth instructions) and FOLLOW it. Pass name=<slug> and task=<what you are about to do, in a "
         "few words, in the language of the skill's description: translate the request if needed>; a long skill may "
-        "come back as the parts this task needs, listing the rest: read one with "
-        "section=<title>, or all with full=true. Available skills (slug: description): " + (listing or "(none yet)"),
+        "come back as the parts this task needs, listing the rest: read one with section=<title>, or all with "
+        "full=true. Not sure which skill fits? Pass find=<the job, a few words, any language> instead of name: it "
+        "searches every skill by its whole description and returns the best matches. Skills: " + (listing or "(none yet)"),
         {"name": {"type": "string"}, "task": {"type": "string"}, "section": {"type": "string"},
-         "full": {"type": "boolean"}}, ["name"], _skill)
+         "full": {"type": "boolean"}, "find": {"type": "string"}}, [], _skill)
 
     # `javis_run_command` chỉ hiện khi phiên CÓ thư mục làm việc. Phiên chat thường không thấy
     # nó, nên không có chuyện một câu hỏi bình thường lại gọi được lệnh máy. Mức quyền vẫn do
@@ -1848,6 +1887,19 @@ def _hidden_hint(hidden, only_ns=None):
 _SO_KQ_DAY_DU = 3
 _MO_TA_DAY_DU = 4000
 _MO_TA_GON = 400
+# Skills a tool search also returns (2026-11-27), each with its whole description, after the tools.
+_SEARCH_SKILLS = 3
+
+
+def _skills_payload(hits) -> dict:
+    """The skills part of a tool search answer: instructions to load, not tools to run."""
+    return {"skills": [{"name": h["slug"], "group": h.get("group") or "", "description": h.get("description") or ""}
+                       for h in hits],
+            "skills_note": ("Skills are instructions, not tools: load one with javis_use_skill(name=<name>) "
+                            f"(through {_LAZY_RUN} when javis_use_skill is not among your tools) and follow it, "
+                            "only if it fits the request.")}
+
+
 # Whole answer of one tool search, in characters. Hits are listed in full (description + schema) while they fit;
 # the rest are named with one line each, and a search by exact name returns the schema of any of them. The best
 # hit is always given in full, whatever its size.
@@ -1912,6 +1964,15 @@ def _lazy_tools_and_route(visible_tools, visible_route, pool, full_route, top_k,
         amb = _match_ambient(ambient, q)
         hits = res["hits"]
         via = res.get("via") or []
+        # 2026-11-27: skills answer the same search, each by its WHOLE description (skill_finder). A skill used to
+        # be found here only through javis_use_skill's own description, a list cut at 150 characters a skill.
+        skill_hits = []
+        if scope and "javis_use_skill" in full_route and str(q).strip():
+            # The suggestion bar, not the looser one of an explicit skill search: this search is usually for a tool.
+            skill_hits = await asyncio.to_thread(skill_finder.search, scope, str(q), _SEARCH_SKILLS, "",
+                                                 skill_finder.SUGGEST_MIN_UNITS)
+        if not hits and not amb and not via and skill_hits:
+            return json.dumps(_skills_payload(skill_hits), ensure_ascii=False)
         if not hits and not amb and not via:
             hint = _hidden_hint(hidden)
             return ("Không thấy tool khớp. Nguồn đang đấu: " + (menu or "(chưa có nguồn nào)")
@@ -2008,6 +2069,8 @@ def _lazy_tools_and_route(visible_tools, visible_route, pool, full_route, top_k,
                                     f"(KHÔNG qua {_LAZY_RUN}). Không thấy trong danh sách tool thì nguồn này "
                                     + missing}
                     for s in group]
+        if skill_hits:
+            payload.update(_skills_payload(skill_hits))
         return json.dumps(payload, ensure_ascii=False)
 
     async def _run(args):
@@ -2202,6 +2265,41 @@ def _scope_tools(tools, route, allowlist):
 async def discover_all(mode="full", vault_root=None, include_plugins=True, include_ambient=False,
                        force_refresh=False, force_lazy=False, staging=False, workspace_root=None,
                        coding_ctx_cua_phien=None, for_bot=False, tool_allowlist=None):
+    """(tools_spec, route) for one mode: the shared, cached list (`_discover_all_cached`) plus the tools that belong to
+    the turn bound now (`_with_turn_tools`). See `_discover_all_cached` for the arguments."""
+    tools, route = await _discover_all_cached(
+        mode, vault_root, include_plugins, include_ambient, force_refresh=force_refresh, force_lazy=force_lazy,
+        staging=staging, workspace_root=workspace_root, coding_ctx_cua_phien=coding_ctx_cua_phien, for_bot=for_bot,
+        tool_allowlist=tool_allowlist)
+    if tool_allowlist is not None:
+        return tools, route          # a gated step answers its own list only
+    return _with_turn_tools(tools, route, mode)
+
+
+def _with_turn_tools(tools, route, mode):
+    """Add the tools of ONE turn to a list: today `ask_staff` of a dedicated bot with a staff contact (staff_requests).
+
+    Never part of the cached lists, which every turn of the same mode and brain shares. The tool decides from the turn
+    the host bound (`turn_context`) and the bot's record; it is offered only at hub mode "full" with the bot's own level
+    "full" for this chat, and checks both again when called. Outside actions are marked like a plugin's."""
+    try:
+        import staff_requests
+        extra = staff_requests.turn_tool((mode or "full").strip().lower())
+    except Exception as e:      # noqa: BLE001 - a broken extra must never cost the turn its normal tools
+        print(f"[hub] turn tools: {type(e).__name__}: {e}", file=sys.stderr)
+        extra = None
+    if not extra:
+        return tools, route
+    spec, entry = extra
+    if spec["fn"] in route:
+        return tools, route
+    entry = dict(entry, call=_outside_plugin_call(spec["fn"], entry["call"]))
+    return list(tools) + [spec], dict(route, **{spec["fn"]: entry})
+
+
+async def _discover_all_cached(mode="full", vault_root=None, include_plugins=True, include_ambient=False,
+                               force_refresh=False, force_lazy=False, staging=False, workspace_root=None,
+                               coding_ctx_cua_phien=None, for_bot=False, tool_allowlist=None):
     """(tools_spec, route) đầy đủ cho 1 mode. route entries ĐÃ bọc quyền + audit.
     include_plugins=False: bỏ nhóm tool plugin - dùng khi engine SDK đã đấu plugin
     IN-PROCESS (header X-Javis-No-Plugins) để model không thấy tool trùng chức năng.
@@ -2266,10 +2364,11 @@ async def discover_all(mode="full", vault_root=None, include_plugins=True, inclu
 
             async def _refresh():
                 try:
-                    await discover_all(mode, vault_root, include_plugins, include_ambient, force_refresh=True,
-                                       force_lazy=force_lazy, staging=staging, workspace_root=workspace_root,
-                                       coding_ctx_cua_phien=coding_ctx_cua_phien, for_bot=for_bot,
-                                       tool_allowlist=tool_allowlist)
+                    await _discover_all_cached(mode, vault_root, include_plugins, include_ambient,
+                                               force_refresh=True, force_lazy=force_lazy, staging=staging,
+                                               workspace_root=workspace_root,
+                                               coding_ctx_cua_phien=coding_ctx_cua_phien, for_bot=for_bot,
+                                               tool_allowlist=tool_allowlist)
                 except Exception as e:  # noqa: BLE001 - the next caller simply dials again
                     print(f"[hub] background refresh failed: {type(e).__name__}: {e}", file=sys.stderr)
                 finally:
@@ -2301,7 +2400,8 @@ async def discover_all(mode="full", vault_root=None, include_plugins=True, inclu
         if owner_browser and browser_login.is_browser_spec(raw.get("spec")):
             continue
         conn = raw["conn"]
-        connector = mcp_catalog.for_connection(conn)
+        connector = mcp_catalog.with_server_read_only(mcp_catalog.for_connection(conn),
+                                                      {"url": (raw.get("spec") or {}).get("url") or conn.get("url")})
         # A gated Team step (0.207.0) lists like full: an outside action must be callable so the gate can stop it and
         # turn it into an approval request, and run it once approved. The call itself is still capped (`_guard`).
         eff = mcp_catalog.effective_perm(conn.get("perm"), "full" if mode == team_gate.HUB_MODE else mode)
@@ -2361,6 +2461,13 @@ async def discover_all(mode="full", vault_root=None, include_plugins=True, inclu
         s_spec, s_entry = scout.build(vault_root, mode)
         tools_spec.append(s_spec)
         route[s_spec["fn"]] = s_entry
+    # javis_recall (2026-11-27): searches an assistant's long-term memory and documents (agent_recall.py), the layer a
+    # large memory relies on now that it is no longer preloaded whole. Read-only; never for a customer bot (it reads
+    # the owner's assistants).
+    if agent_recall.tool_available() and not for_bot:
+        r_spec, r_entry = agent_recall.build(vault_root, mode)
+        tools_spec.append(r_spec)
+        route[r_spec["fn"]] = r_entry
 
     # PLUGIN: tool do plugin đăng ký (bundled + vault) → mọi engine, tôn trọng min_mode.
     # Trùng tên tool đã có (MCP/builtin) → BỎ QUA (không cho plugin shadow tool lõi).

@@ -183,6 +183,7 @@
       _bots = d.bots || [];
       _mucDS = d.muc_quyen || [];
       _kenhDS = d.kenh || [];
+      if (window.Icons && Icons.learnChannels) Icons.learnChannels(_kenhDS);
       _tkRanh = d.tai_khoan || [];
       _tkBan = d.tai_khoan_ban || [];
       var vet = JSON.stringify(_bots);
@@ -893,6 +894,7 @@
       try {
         var d = await api("/chatbots?brain=" + encodeURIComponent(brain()));
         _kenhDS = d.kenh || _kenhDS;
+        if (window.Icons && Icons.learnChannels) Icons.learnChannels(_kenhDS);
         _tkRanh = d.tai_khoan || [];
         _tkBan = d.tai_khoan_ban || _tkBan;
       } catch (e) {}
@@ -930,6 +932,10 @@
     // "Tự động hóa tất cả" không phải một giá trị lưu riêng: nó là "mọi cuộc chat" cộng "tự đánh giá" gộp làm MỘT cú chọn
     // (lưu xuống vẫn là audience=all, reply_when=auto), nên bot đã cài như vậy từ trước tự hiện đúng thẻ này.
     var card0 = (aud0 === "all" && rw0 === "auto") ? "auto" : aud0;
+    // "Hard question in a private chat: stay quiet and tell me" (issue #1864), a tick of its own on every bot. A bot never
+    // saved with it shows what it does today: on in "Tự đánh giá", off otherwise.
+    var esc0 = b ? (b.escalate_private != null ? !!b.escalate_private : b.reply_when === "auto") : false;
+    var escTouched = false;
     var RP = window.JavisReplyPolicy;      // bộ phán xử hội thoại nhóm (0.65.0), file chatbots-reply-policy.js
     // Người/nhóm ĐANG được chọn (sự thật của form). Danh sách cuộc chat từ server chỉ là nguồn để
     // chọn; tick hay bỏ tick sửa ở đây, và lúc Lưu mới đổ ra hai danh sách groups/people.
@@ -1055,6 +1061,26 @@
                 esc(b && b.nhuong_tay_phut != null ? String(b.nhuong_tay_phut) : "") + '"></label>' +
             '</div>' +
             infoBody(esc(window.t("cb.hint_nhuong_tay"))) +
+            // Issue #1873: seconds a customer must be quiet in a private chat before the bot answers, on every channel, so
+            // three quick messages get one reply. Blank = not set (5 seconds), 0 = answer each message at once.
+            '<div class="cb-gio-truc">' +
+              '<label for="cbQuietWait">' + esc(window.t("cb.quiet_wait")) + infoBtn() +
+                ' <input type="number" id="cbQuietWait" min="0" max="60" step="1" style="width:8em" placeholder="' + esc(window.t("cb.ph_quiet_wait")) + '" value="' +
+                esc(b && b.quiet_wait_s != null ? String(b.quiet_wait_s) : "") + '"></label>' +
+            '</div>' +
+            infoBody(esc(window.t("cb.hint_quiet_wait"))) +
+            // Issue #1864: every channel, Messenger and Zalo OA included, can leave a hard private question to the owner.
+            '<label class="cb-gio-truc" for="cbEscPrivate"><input type="checkbox" id="cbEscPrivate"' +
+              (esc0 ? " checked" : "") + '> ' + esc(window.t("cb.esc_private")) + infoBtn() + '</label>' +
+            infoBody(esc(window.t("cb.hint_esc_private"))) +
+            // Owner bell gap (issue #1838): minutes between two bells of one chat when the bot leaves hard messages to the
+            // owner. Shown when the bot may escalate: "Tự đánh giá" in groups, or the private tick above (`veRw`).
+            '<div class="cb-gio-truc" id="cbBellBox" style="display:none">' +
+              '<label for="cbBellGap">' + esc(window.t("cb.bell_gap")) + infoBtn() +
+                ' <input type="number" id="cbBellGap" min="0" max="240" step="1" style="width:8em" placeholder="' + esc(window.t("cb.ph_bell_gap")) + '" value="' +
+                esc(b && b.bell_gap_min != null ? String(b.bell_gap_min) : "") + '"></label>' +
+            '</div>' +
+            infoBody(esc(window.t("cb.hint_bell_gap"))) +
             // Friend-request intake (0.172.0): accept requests and hand their introduction to the bot. Shown only
             // while a personal Zalo account is ticked (`apDoiTuong`): no other channel has friend requests.
             '<div id="cbKbBox" style="display:none">' +
@@ -1086,6 +1112,14 @@
               '</div>' +
             '</div>' +
             infoBody(esc(window.t("cb.hint_ngoai_le"))) +
+          '</div>' +
+
+          // 7. Staff contact (2026-11-26, server/staff_requests.py): the ONE chat the bot asks when only a person knows
+          // the answer. One field, picked from the chats the inbox knows on the ticked personal Zalo / Telegram accounts.
+          '<div class="cb-sec">' + voiInfo(secH("headset", "cb.s_staff")) +
+            '<select id="cbStaff" class="cb-staff" aria-label="' + esc(window.t("cb.s_staff")) + '"></select>' +
+            '<div class="cb-hint" id="cbStaffNote" hidden></div>' +
+            infoBody(esc(window.t("cb.hint_staff"))) +
           '</div>' +
 
           // No language picker since 2026-11-15 (owner): the bot answers each customer in the language they write.
@@ -1354,6 +1388,70 @@
     };
     veNl();
 
+    // ---- Staff contact (2026-11-26): { account_id, chat_id, chat_type, name } or null. The saved chat stays listed even
+    // when the page of chats does not bring it. The server offers `ask_staff` only at Full power, so below that a short
+    // line under the field says why it would not work yet.
+    var STAFF_CHANNELS = ["zalo_personal", "telegram"];
+    var staffCur = (b && b.staff_contact && b.staff_contact.chat_id) ? Object.assign({}, b.staff_contact) : null;
+    var staffChats = [], staffSeq = 0;
+    function staffAccounts() {
+      return tkDangChon().filter(function (a) { return STAFF_CHANNELS.indexOf(a.channel) >= 0; });
+    }
+    function staffKey(aid, cid) { return aid + "\n" + cid; }
+    function drawStaff() {
+      var sel = box.querySelector("#cbStaff");
+      var accs = staffAccounts(), on = {};
+      accs.forEach(function (a) { on[a.id] = true; });
+      var rows = staffChats.filter(function (c) { return on[c.tk]; });
+      var cur = staffCur && on[staffCur.account_id] ? staffKey(staffCur.account_id, staffCur.chat_id) : "";
+      if (cur && !rows.some(function (c) { return staffKey(c.tk, c.id) === cur; })) {
+        rows.unshift({ tk: staffCur.account_id, id: staffCur.chat_id, ten: staffCur.name, loai: staffCur.chat_type });
+      }
+      sel.innerHTML = '<option value="">' + esc(window.t("cb.staff_none")) + '</option>' + rows.map(function (c) {
+        var k = staffKey(c.tk, c.id);
+        var label = (c.ten || c.id) + (c.loai === "group" ? " · " + window.t("cb.staff_group") : "") +
+          (accs.length > 1 ? " · " + nlTenTk(c.tk) : "");
+        return '<option value="' + esc(k) + '"' + (k === cur ? " selected" : "") + '>' + esc(label) + '</option>';
+      }).join("");
+      sel.disabled = !accs.length;
+      drawStaffNote();
+    }
+    function drawStaffNote() {
+      var note = box.querySelector("#cbStaffNote");
+      var msg = !staffAccounts().length ? window.t("cb.staff_no_channel")
+        : (box.querySelector("#cbStaff").value && (giaTri("cbMuc") || "suggest") !== "full") ? window.t("cb.staff_need_full")
+        : "";
+      note.textContent = msg;
+      note.hidden = !msg;
+    }
+    async function loadStaff() {
+      var ids = staffAccounts().map(function (a) { return a.id; }).join(",");
+      var turn = ++staffSeq;
+      if (!ids) { staffChats = []; drawStaff(); return; }
+      try {
+        var d = await api("/chatbots/chats?account_ids=" + encodeURIComponent(ids) + "&limit=200");
+        if (turn !== staffSeq) return;
+        // Only rows the inbox ties to an account: the contact is scoped to the account it lives on.
+        staffChats = (d.chats || []).filter(function (c) { return c.tk; });
+      } catch (e) { if (turn !== staffSeq) return; staffChats = []; }
+      drawStaff();
+    }
+    box.querySelector("#cbStaff").onchange = function () {
+      var v = this.value;
+      if (!v) {
+        staffCur = null;
+      } else {
+        var p = v.split("\n");
+        var c = staffChats.filter(function (x) { return x.tk === p[0] && x.id === p[1]; })[0] ||
+          (staffCur && staffCur.account_id === p[0] && staffCur.chat_id === p[1]
+            ? { ten: staffCur.name, loai: staffCur.chat_type } : {});
+        staffCur = { account_id: p[0], chat_id: p[1], chat_type: c.loai === "group" ? "group" : "private",
+                     name: c.ten && c.ten !== p[1] ? c.ten : "" };
+      }
+      drawStaffNote();
+    };
+    box.querySelectorAll('input[name="cbMuc"]').forEach(function (i) { i.addEventListener("change", drawStaffNote); });
+
     // ---- Chế độ lên tiếng trong nhóm
     var RW_H = { mention: "cb2.rw_mention_h", auto: "cb2.rw_auto_h", always: "cb2.rw_always_h" };
     function veRw() {
@@ -1372,8 +1470,16 @@
       box.querySelector("#cbRwTg").style.display = coTg && v !== "mention" ? "" : "none";
       var rpBox = box.querySelector("#cbRpBox");
       if (rpBox) rpBox.style.display = v === "auto" ? "" : "none";
+      // The bell gap only matters when the bot may leave a message to the owner, i.e. in "Tự đánh giá".
+      var escBox = box.querySelector("#cbEscPrivate");
+      // Picking "Tự động hóa tất cả" used to switch private escalation on by itself: keep that until the owner touches the tick.
+      if (escBox && !escTouched && tuDong) escBox.checked = true;
+      var bellBox = box.querySelector("#cbBellBox");
+      if (bellBox) bellBox.style.display = (v === "auto" && coNhomForm()) || (escBox && escBox.checked) ? "" : "none";
     }
     box.querySelectorAll('input[name="cbRw"]').forEach(function (i) { i.onchange = veRw; });
+    var escTick = box.querySelector("#cbEscPrivate");
+    if (escTick) escTick.addEventListener("change", function () { escTouched = true; veRw(); });
 
     // ---- Bot trả lời ai: ba thẻ quyết định ô chọn nào hiện, và chữ của ô đó
     function apGoiY() {
@@ -1469,11 +1575,12 @@
     // Nối lại sự kiện cho danh sách tài khoản: nó được vẽ lại sau mỗi lần nối kênh mới.
     function noiTK() {
       box.querySelectorAll(".cb-tk-o").forEach(function (n) {
-        n.onchange = function () { apDoiTuong(); veTom(); taiNl(); };
+        n.onchange = function () { apDoiTuong(); veTom(); taiNl(); loadStaff(); };
       });
       apDoiTuong();
       veTom();
       taiNl();
+      loadStaff();
     }
     noiTK();
 
@@ -1551,6 +1658,10 @@
       if (!gioTu !== !gioDen) return alert(window.t("cb.gio_thieu"));
       var nhuong = ((box.querySelector("#cbNhuongTay") || {}).value || "").trim();
       if (nhuong !== "" && !(/^\d+$/.test(nhuong) && +nhuong <= 240)) return alert(window.t("cb.nhuong_tay_sai"));
+      var quiet = ((box.querySelector("#cbQuietWait") || {}).value || "").trim();
+      if (quiet !== "" && !(/^\d+$/.test(quiet) && +quiet <= 60)) return alert(window.t("cb.quiet_wait_sai"));
+      var bell = ((box.querySelector("#cbBellGap") || {}).value || "").trim();
+      if (bell !== "" && !(/^\d+$/.test(bell) && +bell <= 240)) return alert(window.t("cb.bell_gap_sai"));
       if (nlDs.some(function (e) { return e.cho_giay != null && !(e.cho_giay >= 0 && e.cho_giay <= 60 && e.cho_giay % 1 === 0); })) {
         return alert(window.t("cb.ngoai_le_sai"));
       }
@@ -1573,10 +1684,15 @@
                     reply_when: co ? (the === "auto" ? "auto" : (giaTri("cbRw") || "mention")) : "mention",
                     account_ids: ids.join(","),
                     gio_truc: gioTu ? JSON.stringify({ tu: gioTu, den: gioDen }) : "",
-                    nhuong_tay_phut: nhuong, ngoai_le: JSON.stringify(nlDs),
+                    nhuong_tay_phut: nhuong, bell_gap_min: bell, ngoai_le: JSON.stringify(nlDs),
                     nhan_ket_ban: coZaloCaNhan() && (box.querySelector("#cbNhanKetBan") || {}).checked ? "1" : "0",
                     group_typing: (box.querySelector("#cbGroupTyping") || {}).checked === false ? "0" : "1",
-                    skip_labels: coZaloCaNhan() ? tagLuu() : "[]" };
+                    escalate_private: (box.querySelector("#cbEscPrivate") || {}).checked ? "1" : "0",
+                    quiet_wait_s: quiet,
+                    skip_labels: coZaloCaNhan() ? tagLuu() : "[]",
+                    // The contact only on an account still ticked; "" clears it (2026-11-26).
+                    staff_contact: staffCur && staffAccounts().some(function (a) { return a.id === staffCur.account_id; })
+                      ? JSON.stringify(staffCur) : "" };
       if (nang.length) chung.xac_nhan_ngoai_le = "1";
       try {
         if (sua) {

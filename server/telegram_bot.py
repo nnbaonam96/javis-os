@@ -39,9 +39,10 @@ from pathlib import Path
 
 import httpx
 
+import bot_split
 import stt
 import localefmt
-from bot_gateway import HangLuot, dong_vet, ten_tool
+from bot_gateway import HangLuot, dong_vet, ten_tool, trace_wanted
 
 
 def parse_chat_ids(raw):
@@ -92,7 +93,7 @@ MAX_PHOTO_MB = 10   # trần sendPhoto
 MAX_DOWNLOAD_MB = 20  # bot API chỉ cho TẢI VỀ file ≤ 20MB
 VIDEO_EXTS = {".mp4", ".mov", ".m4v"}
 MAX_VIDEO_MB = 50     # sendVideo
-MAX_CHUNK = 3500      # chars per message (4096 minus room for MarkdownV2 escapes)
+MAX_CHUNK = bot_split.CHANNELS["telegram"].max_len   # chars per message (4096 minus room for MarkdownV2 escapes)
 ALBUM_WAIT = 1.5      # seconds to gather the parts of an album before answering it once
 RETRY_429 = 2
 RETRY_MAX_WAIT = 30
@@ -400,8 +401,14 @@ class TelegramBot(HangLuot):
             return
         text = text or "(không có nội dung)"
         thread_id = thread_id or self._topic_of(chat)
-        chunks = _chunks(text) or [text]
-        for idx, chunk in enumerate(chunks):
+        # A dedicated bot's answer the Agent split into short messages (issue #1833, bot_split): one Telegram message per
+        # part, a short pause between parts. The owner's own bot never splits: its text is sent as written.
+        sends = bot_split.outgoing(text, bot_split.splits("telegram")) if self.giau_trang_thai else [text]
+        groups = [(_chunks(p) or [p]) for p in sends]
+        chunks = [(gi, c) for gi, g in enumerate(groups) for c in g]
+        for idx, (gi, chunk) in enumerate(chunks):
+            if idx and gi != chunks[idx - 1][0]:
+                await asyncio.sleep(bot_split.PART_PAUSE_S)
             # The quote goes on the first chunk only: the rest of a long answer follows it.
             base = _where({"chat_id": chat, "text": chunk}, thread_id, reply_to if idx == 0 else None)
             if reply_markup is not None and idx == len(chunks) - 1:
@@ -602,7 +609,15 @@ class TelegramBot(HangLuot):
             # a plain supergroup also puts `message_thread_id` on replies, and sending with it there fails.
             "thread_id": msg.get("message_thread_id") if msg.get("is_topic_message") else None,
             **({"video_path": msg["_video_path"]} if msg.get("_video_path") else {}),
+            # Text of the message this one replies to (2026-11-26): a staff member replying to the bot's question
+            # names its request code there (staff_requests.pick). Only when there is one.
+            **({"reply_to_text": self._reply_to_text(msg)} if self._reply_to_text(msg) else {}),
         }
+
+    @staticmethod
+    def _reply_to_text(msg):
+        rep = msg.get("reply_to_message") or {}
+        return str(rep.get("text") or rep.get("caption") or "")[:1000]
 
     def _co_nhac_ten(self, msg):
         """Tin này có nhắc tên CHÍNH con bot này không.
@@ -898,7 +913,10 @@ class TelegramBot(HangLuot):
         # bất khả; thứ sửa được là đừng để tin nào biến mất và đừng nổ thông báo thừa.
         status_mid = None
         giu = None
-        if self.giau_trang_thai:
+        # The owner turned the tool trail off (issue #1893): the status message would end as that trail, so it is not
+        # sent at all; the "typing…" dots carry the wait, as in human mode.
+        quiet_status = self.giau_trang_thai or not trace_wanted()
+        if quiet_status:
             giu = asyncio.create_task(self._giu_typing(client, chat, thread))
         else:
             status_mid = await self._send_status(client, chat, "🤔 Javis đang xử lý…", thread, quote)
@@ -907,7 +925,7 @@ class TelegramBot(HangLuot):
         tools = []          # tên công cụ đã gọi trong lượt, giữ thứ tự, không trùng
 
         async def progress(txt):
-            if self.giau_trang_thai:
+            if quiet_status:
                 return              # đã có chấm "đang nhập…" chạy đều, không cần tin nào
             # Gom tên công cụ TRƯỚC cửa throttle. Throttle sinh ra để đỡ spam Telegram, không
             # phải để quên bớt việc đã làm: gom sau cửa thì mấy tool chạy nhanh (2 tool trong

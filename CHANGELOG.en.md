@@ -8,6 +8,177 @@ English entries start at 0.66.0. Every earlier release is described in the Vietn
 
 Format: each release is a `## [x.y.z] - date` block, with changes grouped under `### Added / Fixed / Improved / Security`.
 
+## [0.658.3] - 2026-11-27
+### Fixed
+- **The bot form shows every connected channel.** Picking channels when creating or editing a chatbot used to list only the open brain's channels, so a Page or bot connected in another brain could not be picked. Every brain now lists every channel; a channel another bot already answers still shows greyed out with that bot and its brain. Ticking another brain's channel into a bot moves the channel to the bot's brain, so that brain's inbox shows the chats the bot answers.
+
+## [0.658.2] - 2026-11-27
+### Fixed
+- **Every brain sees every connected Page.** The Facebook Messenger and Threads card on the Connections page used to list only the accounts of the open brain, so one brain showed some Pages and another brain showed others. Every brain now lists the same Pages, Threads accounts and saved apps. A newly connected Page is still saved under the open brain.
+
+## [0.658.1] - 2026-11-27
+### Fixed
+- **Antigravity no longer loses the question when the context is long.** An assistant with a large memory (tens of KB) on Antigravity used to reply "your request was cut off, please resend it" to a short question, because `agy` cuts the end of the first message, exactly where the question sits. A long first message now also carries the latest question at the top, so the model sees it and answers whatever gets cut.
+
+## [0.658.0] - 2026-11-27
+### Added
+- **Assistant memory is searched as needed.** An assistant with a large memory no longer loads the whole file on every turn. Always loaded: the opening text, the owner rules section, sections named as rules, and sections ending with "(always)", plus a map of what the memory holds. The rest and the attached documents are searched for each message (private chat on every engine, Telegram, CLI, workflow steps, team turns), and the assistant looks up more with the new `javis_recall` tool. A 3 MB memory still costs about 1,500 characters of prompt and a search takes under 40 ms. A memory under 12,000 characters works exactly as before.
+- **Learning at write time.** Each new memory passage is read once in the background by a cheap model, which adds the questions it answers and other words for its subject, so a question in different words still finds it. Capped per day, switched off with `agent_recall.enrich: false`.
+- **The assistant's Learned tab** shows that its memory is searched as needed, and warns when the always-loaded rules have grown too long and should be merged.
+### Improved
+- **Javis's memory index updates incrementally.** Adding or editing one memory reads only that file instead of rebuilding everything (5,000 memories: from 2.8 s to 0.3 s), and a query typed without diacritics now also matches the Vietnamese letter d with a stroke.
+
+## [0.657.0] - 2026-11-27
+### Added
+- **Javis on Windows restarts itself when the server dies or hangs.** A background task checks Javis every minute and restarts it after three missed answers in a row, so it is back within about 3 minutes.
+- **A deliberate stop is respected.** After `stop-javis.bat` the watchdog waits until you start Javis again, and it never interrupts an update.
+- **No command to run:** a machine with "Launch Javis at startup" on gets the watchdog after updating, and turning it off removes the watchdog too. Remove it for good with `javis-watchdog.bat uninstall`.
+
+## [0.656.0] - 2026-11-27
+### Added
+- **Javis reads Facebook Page and post insights** (views, viewers, engagement, follows, clicks) through the Pages connected on the Facebook Messenger card, no separate connection needed. Tick "Read post insights" when connecting the Page.
+- **Supabase at Read only can run SELECT** when the connection is Supabase's official MCP server with `read_only=true`. Writes, several statements at once and functions with side effects stay blocked.
+### Security
+- **A custom MCP connection at Read only can no longer run data-changing tools with unusual names** such as `apply_migration`, `reset_branch`, `pause_project` (they used to be taken for reads).
+
+## [0.655.0] - 2026-11-27
+### Added
+- **Clicking "the bot needs a human" opens that customer's chat** on the Inbox page, so you no longer look for them while they wait.
+- **Every bot has a "Hard question in a private chat: stay quiet and tell me" tick**, Messenger and Zalo OA bots included. Before, only bots with groups could turn it on, and saving the form switched it off again.
+- **Bots wait for the customer to finish, then answer once** on every channel (Messenger, Zalo OA, Telegram, WhatsApp...), as personal Zalo already did. A customer tapping a few quick replies gets one combined answer. Set the seconds on the bot form, 5 by default.
+- **Turn off the "⚙ ... · 12s" tool line** under answers on Telegram, Zalo and all your chat channels, with one tick on the Channels page.
+
+## [0.654.0] - 2026-11-27
+### Added
+- **Rename a chat right in Chatbot.** A "Rename" item in the "..." menu and a pencil next to the name in the Info panel.
+- **Names sync both ways with Zalo.** Renaming a group in Javis renames it on Zalo, renaming a customer sets your Zalo nickname for them. A group name or nickname changed on Zalo comes back to Javis too.
+- **Telegram groups can be renamed from Javis** when the bot is an admin. Other channels (Messenger, Zalo OA, Slack...) allow no rename through their API, so the name changes in Javis only, and still follows when the channel reports a new one.
+### Improved
+- **"Javis draft" and "Send" are icons only,** with their name on hover, for a tidier chat box.
+
+## [0.653.1] - 2026-11-27
+### Fixed
+- **Schedules made by background work no longer show up in an unrelated chat.** Before, when a background flow (for example a POSCake order flow) created a reminder while you were chatting about something else, that chat got "Created schedule · Undo" lines and later the "Reminder" cards too. Now the "Created schedule" line lists only what that chat itself made, and a background job's reminder reports to the inbox and Javis Core instead of whichever chat is open.
+- **A schedule that fired or was paused no longer shows as "Removed schedule".** Only a schedule the chat cancelled gets that line.
+
+## [0.653.0] - 2026-11-27
+### Added
+- **Pack channels show their own logo.** A pack declaring `logo_svg` gets its logo on the Chatbot and Conversations pages. The SVG is sanitized: shapes only, no scripts or outside links.
+- **Account form declared by the pack.** A pack declaring `TOKEN_FORM` (text, password, and select fields loaded from the pack) replaces the plain token box, with Generate and Copy for secrets. Secret fields never go into the webhook URL. The form appears when adding and when editing an account.
+- **Duplicate reply warning.** Messenger already answers Facebook and Instagram. When a pack channel reaches either network again, those options start unselected, picking one shows a clear warning, and saving needs a ticked acknowledgement. The server refuses it too without the acknowledgement. Existing accounts can still be re-saved, but repointing one to another account on a covered network needs the acknowledgement too.
+
+## [0.652.0] - 2026-11-27
+### Improved
+- **Add a Page without pasting the App secret again.** The Facebook Messenger card lists the apps your connected Pages already use. Click one, leave the App secret empty and Log in with Facebook to pick more Pages; Javis reuses the saved App secret. The picker marks Pages already connected and only ticks the new ones, with a hint to click Edit previous settings when Facebook returns only the old Pages.
+
+## [0.651.1] - 2026-11-27
+### Fixed
+- **A partner's unread count matches its chat history.** Opening any one chat of a partner used to clear the count on its card while its other chats kept their red dots, and the Partners dot on the left menu pointed at nothing you could find. The card now counts exactly the chats that still show a dot, the partner on screen included.
+- **Workflows get an unread count too**, and the Partners or Workflows tab shows a red dot when something inside is unread.
+- **Partners with unread replies move to an "Unread" block** right under the pinned ones, never hidden in a folded group or on a later page. When the filter hides an unread row, the filter button shows a red dot.
+- The Partners dot on the left menu no longer lights up for chats of a deleted partner or of the old Coding page.
+
+## [0.651.0] - 2026-11-27
+### Added
+- **Each assistant remembers the thinking level you pick in its chat.** Changing the level in a chat with an assistant also applies to new chats with it and to its chats with no level of their own. A window where you picked a level of its own keeps it. The assistant's background work keeps the level in its settings.
+- **Back to the assistant's settings in one tap.** The "Follow the model and thinking level set on the assistant" row in the model list clears both pins at once.
+
+## [0.650.0] - 2026-11-27
+### Added
+- **A long chat resumed after more than an hour no longer re-reads its whole thread.** The Claude Code and ChatGPT prompt cache lives about an hour. Once it has gone cold and the old thread is at least twice the size of a fresh one seeded from the saved conversation, Javis starts a fresh thread and says so in one line in the chat, saving most of the tokens that would have been written again. A chat kept warm by cache keep-warm keeps its thread.
+- **The Usage page has a "Where Claude tokens go" table.** Counted from every Claude Code request logged on the machine: how many times and how many tokens were lost to a cold cache and to a model switch mid-chat, and the share of tokens in requests with more than 200k of context. Suggestions warn when the cold cache takes 5% or more of input tokens.
+
+## [0.649.0] - 2026-11-27
+### Improved
+- **Javis sees every skill.** The skill list in the prompt used to hold about 20 skills (a 44-skill brain hid 23). The prompt now names every skill, short and fixed, so the prompt cache keeps holding.
+- **Skills are picked by their whole description, no longer cut at 150 characters.** Each turn Javis ranks every skill against what you typed and gives the model the few that fit, with their whole description. Measured on two test sets: the right skill 95-96% of the time, against 23-64% before.
+- **A skill description can be up to 1,024 characters** (the Agent Skills standard), so skills from Anthropic or other stores work as written. The "Description too long" warning on the Skills page only shows past 1,024.
+- **Javis learns how you ask for a skill.** A request the suggestions missed, followed by that skill being used, finds it next time. The model can also search skills by the job through `javis_use_skill(find=...)`, the tool search and `javis_code`. Skill description trials (review of skill improvement proposals) now score with the new routing too.
+
+## [0.648.0] - 2026-11-27
+### Added
+- **Each assistant remembers the model you pick in its chat.** Changing the model in a chat with an assistant pins it for chatting with that assistant: new chats and old ones with it run that model. Its background work (reminders, loops, Kanban, team turns, workflows, bots) keeps the model in its settings. The model list has a "Follow the model set on the assistant" row to clear the pin.
+- **A new assistant gets a model that fits its work.** An assistant made in chat, installed from the Store, created on the Partners page or in a team chat and left on "Default" gets one from the first card of your usage order: a strong model for code, data and finance, a balanced one for marketing, sales and customer care, a light one for translation, notes and reminders. Claude picks between Opus, Sonnet and Haiku; ChatGPT, Antigravity and Grok Build pick from your account's own model list. The line under the answer names the model, and you can change it any time.
+
+## [0.647.0] - 2026-11-27
+### Added
+- **Google Workspace card through Google's own servers.** Gmail, Calendar, Drive, Docs, Sheets, Slides, Tasks, Chat and Contacts go through Google's official MCP servers (generally available on 2026-11-24, the same backend as the Google Workspace CLI), with one sign-in. You sign in inside the dashboard, so it works on a VPS too, without the screen the old card needed. Making the OAuth client takes about 3 minutes with Google's Personal mode page: it enables the APIs, with no consent screen or app verification to do.
+- **Google asks before sensitive actions.** Sending mail outside, sharing, moving to trash: Google stops and asks, Javis shows you the question and Google's preview in the chat, and the action runs only if you agree. Javis never answers for you.
+### Improved
+- **Tidier Connections page:** the "Google" group card that opened a service picker is gone. One Google Workspace card connects in one click; Sheets, Keep and the other Google services are cards of their own like any other.
+- The old Google Workspace card (community workspace-mcp), Google Tasks, and the single Gmail and Google Calendar cards are no longer offered for new connections. Connections already made keep running unchanged.
+### Security
+- **Gmail card: sending real mail now needs Full access.** Google added send, reply, forward, trash and spam tools to its Gmail server. Before this release a Gmail connection at Draft could send real mail, and one at Read-only could mark spam.
+
+## [0.646.1] - 2026-11-27
+### Fixed
+- **Javis runs on Windows with Python 3.15 again.** Since 0.642.3, Windows machines on Python 3.15 died at startup, so the Update button rolled back to the old version. The patch that keeps the port open on Windows now takes Python 3.15's new argument, and on a Python it does not know yet it stands aside so the server still starts.
+- **Machines patched by hand update normally.** If the updater reports a conflict in `server/accept_guard.py`, drop the local change to that file and press Update again.
+### Improved
+- **A failed update says why.** When the new version does not start, the updater reads that start's own log before rolling back, keeps its last lines in update.log and shows the error line on the Update screen, instead of only "the new version failed".
+
+## [0.646.0] - 2026-11-27
+### Added
+- **Meta's Muse has its own card on the Models page.** Open "Connect another provider", pick Muse, name the account, paste its cookie, press Connect Muse. Muse joins the usage order like ChatGPT or Claude, drag it in as a fallback or pick it as the background model.
+- **Several Muse accounts on one card.** One row per account: switch off or on, paste a new cookie when the session ends, remove. Needs Muse Gateway running on your machine or in Docker next to Javis.
+- **Muse can do background work.** Muse cannot call tools by itself, so Javis teaches it to call them in text: read and write brain files and use your connections like every other brain. This is an unofficial route, and accounts used this way may be locked by Muse.
+
+## [0.645.4] - 2026-11-26
+### Fixed
+- **Connectors added on claude.ai (Gmail, Calendar, Drive...) work again while Claude Code runs on the long-lived token.** Claude Code gives a `claude setup-token` token model access only, never claude.ai connectors. Now, when the machine still has a full claude.ai sign-in, Javis runs on it so every connector loads, and keeps the token as the backup: once the sign-in ends, that turn runs again on the token and bots and background work keep going. The Claude Code card on the Models page says whether claude.ai connectors are on or off, with a Turn on claude.ai connectors button for a one-time sign-in.
+- **The ChatGPT browser sign-in asks for the same access as Codex.** It used to leave out ChatGPT apps and connectors, so Codex could not see them. Anyone who signed in this way signs in once more to get them.
+
+## [0.645.3] - 2026-11-26
+### Fixed
+- **NotebookLM no longer signs out after a few hours.** The session you paste is now kept in the connection's own file, readable only by your account, so the cookies Google rotates are saved. Existing connections switch over on their next start, with no need to paste again.
+
+## [0.645.2] - 2026-11-26
+### Fixed
+- **No more console errors after leaving the Tasks page or when the Skills panel is missing.** The Tasks auto-refresh stops cleanly once its page is closed, and the Skills panel exits early when its container is absent.
+
+## [0.645.1] - 2026-11-26
+### Fixed
+- **Background jobs that need you now ask you instead of retrying in silence.** A workflow step that keeps failing its check, or a workflow waiting for your approval, becomes a question on the Tasks page and in the bell. Answer it and the job carries on.
+- **Reminders and loops made in an assistant's chat run on that assistant's own model and thinking level.** A loop's check still runs on the background model. Thanks to @tunganh0990 (#1847).
+- **ChatGPT knows its thinking levels right after Javis restarts**, without waiting for the Models page.
+- **Javis on Windows no longer burns CPU when its port keeps failing to accept connections.** After each failure it waits a moment before trying again.
+
+## [0.645.0] - 2026-11-26
+### Added
+- **Bots remember they are waiting for an answer.** When the bot or a staff member asks a customer something in a group and the answer comes an hour later (even a short one without a question mark), the bot still knows it is the answer and considers replying.
+- **Bots send several short messages on Messenger, Zalo OA and Telegram,** as they already did on personal Zalo. A reply under a post stays one reply.
+- **The gap between two owner bells is a setting** on the bot form (Auto-judge mode): blank means 10 minutes, 0 rings every time.
+### Fixed
+- **Owner bells are no longer lost.** If the customer sends more hard messages while waiting, Javis rings once when the gap ends, with how many there were and the latest one, unless you already answered the customer.
+
+## [0.644.0] - 2026-11-26
+### Added
+- **A bot asks the staff contact, then tells the customer.** When a customer asks something only a person knows (a price, stock, a free slot, a delivery date), the bot sends the question with a short code to the staff contact and tells the customer it is checking.
+- **The staff answers, the customer hears back.** A reply to the bot's message, or a message with the code, is passed on by the bot to the right chat in its own voice and written to the inbox. A question unanswered for 24 hours expires.
+- **Pick the staff contact in the bot form.** One new field, picked from the personal Zalo or Telegram chats the bot serves. The bot needs Full power; with nobody picked the bot works exactly as before.
+
+## [0.643.0] - 2026-11-26
+### Added
+- **Pick the mic and speaker for calls.** In Settings, Voice, pick the mic and speaker right beside Test mic and Test speaker. If the picked device is unplugged, Javis falls back to the system default. iPhone and Safari choose the speaker themselves, so only the mic list shows there.
+### Improved
+- **Messenger tells you when customers' messages do not arrive.** When the Page writes to several people and none of their messages reach Javis, the bot card shows a warning: Meta may only be delivering messages from people with a role on the app, so request Advanced Access for pages_messaging. It clears itself once an ordinary customer's message arrives.
+
+## [0.642.5] - 2026-11-26
+### Fixed
+- **Bots remember the whole chat.** What staff write from the Zalo OA app, the Page inbox or the Javis inbox now reaches the bot, even in a chat the staff opened. Before, the bot answered as if it knew nothing.
+- **Nothing is sent twice.** A photo, file or answer a tool already sent during the turn is not sent again at the end of it, on every channel.
+
+## [0.642.4] - 2026-11-26
+### Fixed
+- **The Assistants page toolbar on a phone is one row.** The "New conversation" button that duplicated the header + is gone, "Documents & Learned" is just the paperclip, and the right panel toggle no longer drops to its own line.
+- **The header + starts a new conversation with the chosen assistant** while the Assistants page is open.
+
+## [0.642.3] - 2026-11-26
+### Fixed
+- **Javis on Windows no longer goes offline until restarted.** A connection dropped at the wrong moment, common right after the PC wakes up, used to make the server stop taking new connections while it kept running.
+- **Fewer freezes with Grok.** Checking the Grok version no longer stalls the whole app for a few seconds.
+- **The last 5 log files are kept** across restarts on Windows, so there is a trail when something goes wrong.
+
 ## [0.642.2] - 2026-11-26
 ### Fixed
 - **Each chat window keeps its own model and reasoning level.** Changing one no longer moves other windows, the Models page or the assistant's file. A chat with an assistant runs at that window's own level, else the assistant's setting.

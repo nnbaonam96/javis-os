@@ -393,6 +393,14 @@ button.ord-mi:hover, button.ord-mi:focus-visible { background: var(--bg3); }
    does not zoom in. An empty box the sign-in waits for, here or in the add-account sheet, turns red. */
 .prov-action .prov-acname { flex: 1 1 100%; max-width: 420px; font-size: 16px; }
 .prov-action .prov-acname + .gcard-btn { margin-left: 0; }
+/* Muse (26/11/2026): the pasted cookie is one long line, so its box takes the whole row, like the name above it. */
+.prov-action .muse-cookie { flex: 1 1 100%; max-width: 420px; min-height: 88px; font-size: 16px; resize: vertical;
+  font-family: inherit; }
+.prov-card .prov-help + .prov-help { margin-top: 2px; }
+.muse-steps { margin: 6px 0 0; padding-left: 22px; color: var(--text2); }
+.muse-steps li { margin: 2px 0; }
+.muse-gw { display: flex; flex-direction: column; gap: 8px; margin-top: 8px; max-width: 420px; }
+.muse-gw .js-input { font-size: 16px; }
 .js-input.need:placeholder-shown { border-color: var(--red); box-shadow: 0 0 0 2px color-mix(in srgb, var(--red) 20%, transparent); }
 /* Claude sign-in code (0.308.0): the box takes the row, at least 240px before the button wraps under it on a phone;
    16px so iOS does not zoom in, monospace so a mistyped character is easy to spot. */
@@ -1305,10 +1313,7 @@ body.has-rail .hud { margin-left: var(--rail-w); width: calc(100% - var(--rail-w
 .conn-chip.conn-fix { border-color: var(--danger-line); color: var(--red); background: var(--danger-wash); }
 .conn-chip.conn-fix:hover { background: var(--danger-wash); }
 .conn-chip .cstar { color: var(--warn-ink); }
-/* Khối B: nhóm Google một cửa + wizard từng bước + kéo thả JSON + dùng lại key */
-.gico { display: inline-flex; align-items: center; justify-content: center; width: 34px; height: 34px;
-  border-radius: 9px; background: #fff; color: #4285f4; font-weight: 800; font-size: 21px;
-  font-family: Arial, sans-serif; }
+/* Khối B: wizard từng bước + kéo thả JSON + dùng lại key */
 .conn-steps { margin: 4px 0 10px; padding-left: 22px; display: flex; flex-direction: column; gap: 9px;
   font-size: 13.5px; line-height: 1.5; }
 .conn-steps li::marker { color: var(--accent); font-weight: 700; }
@@ -2120,6 +2125,10 @@ body.has-rail .hud { margin-left: var(--rail-w); width: calc(100% - var(--rail-w
   font-family: var(--font); font-size: 13px; font-weight: 700; white-space: nowrap; }
 .ws-seg button:hover { color: var(--accent); border-color: var(--accent); }
 .ws-seg button.on { color: var(--accent); border-color: #7d532d; background: rgba(255, 122, 60, .12); }
+/* 2026-11-27: red dot on the tab that holds an unread chat (workspace.js veTabUnread). In the folded strip the label is
+   gone, so the dot sits on the button's corner. */
+.ws-seg button { position: relative; }
+.wspage.ws-mini .ws-tab-unread { position: absolute; top: 3px; right: 3px; }
 .ws-search, .ws-group { width: 100%; box-sizing: border-box; padding: 7px 9px; border-radius: 9px;
   border: 1px solid var(--border); background: none; color: var(--text); font-family: var(--font);
   font-size: 13px; }
@@ -2538,18 +2547,23 @@ body.has-rail .hud { margin-left: var(--rail-w); width: calc(100% - var(--rail-w
 .ws-id .agent-avatar { flex:none; }
 @media (max-width:1200px) { .ws-right { width:310px; } }
 /* Hàng nút đứng trước tiêu đề trong DOM; icon nhỏ và tên luôn cùng một dòng. */
+/* 2026-11-26 (owner: "có nút cộng là hội thoại mới rồi... chỉ cần hiện cái ghim"): wherever the phone header shows
+   its + (same 860px breakpoint as .new-chat-btn above), the bar drops its own "New conversation" button and the
+   documents button shrinks to the paperclip, so the bar is one row: list toggle, paperclip, panel toggle at the right
+   edge. workspace.js points the header + at this page's new conversation while the page is open. */
+@media (max-width:860px) {
+  .ws-bar { flex-wrap:nowrap; gap:6px; }
+  .ws-bar #wsNewChat { display:none; }
+  .ws-bar #wsFiles { padding-left:9px; padding-right:9px; }
+  .ws-bar #wsFiles .ws-files-lbl { display:none; }
+}
 @media (max-width:600px) {
   .ws-right { width:min(350px,90vw); }
-  .ws-bar { flex-wrap:wrap; gap:8px 6px; }
   /* Lúc hỏng, câu báo lỗi và nút Thử lại được nhồi vào chính ô tên (xem veLoi trong
      workspace.js). Chen cạnh cái tên trên màn hẹp thì câu lỗi bị cắt giữa chữ và chữ trên nút
      bẻ làm hai dòng, nên cho cả hai xuống một dòng riêng. */
   .ws-id .ws-err { flex:1 0 100%; }
   .ws-id #wsRetry { flex:none; }
-  /* Dòng riêng thì "Hội thoại mới" không phải co chữ hay bẻ dòng để chen vào nữa. */
-  #wsNewChat { font-size:12px; white-space:nowrap; }
-  /* Nút mở cột phải dạt về mép phải, cân với nút mở cột trái ở đầu dòng. */
-  #wsRightBtn { margin-left:auto; }
 }
 @media (prefers-reduced-motion:reduce) { .agent-avatar *, .agent-avatar svg { animation:none!important; transition:none!important; } }
 
@@ -2921,6 +2935,14 @@ body.has-rail .hud { margin-left: var(--rail-w); width: calc(100% - var(--rail-w
 .ht-kenh-het { padding: 16px; }
 @media (max-width: 900px) { .ht-kenh-tog { font-size: 16px; } }
 .ht-form label { display: block; margin: 12px 0 4px; font-size: 13px; color: var(--text2); font-weight: 600; }
+/* Duplicate warning of a declared account form: an account on a network a core channel already answers. Amber, never
+   folded, with its own confirm box (the Save button refuses until it is ticked). */
+.ht-dup { margin-top: 8px; padding: 11px 13px; border-radius: 10px; font-size: 16px; line-height: 1.5; color: var(--text);
+  background: var(--warn-wash, rgba(234, 179, 8, .1)); border: 1px solid var(--warn-line, rgba(183, 121, 31, .3)); }
+.ht-dup-title { font-weight: 700; color: var(--warn-ink, #b7791f); margin-bottom: 3px; }
+.ht-form .ht-dup-ack { display: flex; align-items: center; gap: 8px; margin: 8px 0 0; font-size: 16px; font-weight: 600;
+  color: var(--text); min-height: 48px; cursor: pointer; }
+.ht-dup-ack input { width: 18px; height: 18px; flex: none; margin: 0; }
 .ht-form input { width: 100%; box-sizing: border-box; padding: 8px 10px; border-radius: 9px; border: 1px solid var(--border);
   background: var(--bg3); color: var(--text); font-size: 14px; }
 .ht-form input:focus { border-color: var(--info-line); outline: none; }
@@ -3099,6 +3121,16 @@ body.has-rail .hud { margin-left: var(--rail-w); width: calc(100% - var(--rail-w
 }
 #voiceCard .vc-mismatch .gcard-btn { width: auto; flex: none; }
 @media (prefers-reduced-motion: reduce) { #voiceCard .vc-saved { transition: none; } }
+/* Mic and speaker of a call, each beside its test (audio-devices.js, 26/11/2026): readable text and finger-sized
+   controls, as the owner asks of every new screen (16px text, 48px tap targets). */
+#voiceCard .vc-dev .vc-lblcol { padding-top: 12px; }
+#voiceCard .vc-dev .qs-lbl { font-size: 16px; }
+#voiceCard .vc-dev .vc-sub { font-size: 16px; line-height: 1.4; }
+#voiceCard .vc-dev .v2-voice-row > select,
+#voiceCard .vc-dev .v2-voice-row > .gcard-btn { min-height: 48px; font-size: 16px; }
+/* Both test buttons one width, so the two lists end on the same edge ("Test speaker" is the longest label). */
+#voiceCard .vc-dev .v2-voice-row > .gcard-btn { min-width: 8.5em; }
+@media (max-width: 700px) { #voiceCard .vc-dev .vc-lblcol { padding-top: 8px; } }   /* label above, as the rows around */
 
 /* ---- Trang Kênh Admin (0.85.0): mỗi kênh một tab ----
    Một cột, rộng tối đa 620px: đây là trang cài đặt, phải đọc được trên điện thoại. Thanh tab cuộn
@@ -3108,6 +3140,10 @@ body.has-rail .hud { margin-left: var(--rail-w); width: calc(100% - var(--rail-w
 .ach-intro { margin: 0 0 12px; color: var(--text2); font-size: 13.5px; line-height: 1.5; }
 .ach-intro a { color: var(--accent-ink); font-weight: 600; text-decoration: none; }
 .ach-intro a:hover { text-decoration: underline; }
+/* Issue #1893: the tool trail switch under the channel tabs, one row, a 48px tap target. */
+.ach-opt { display: flex; align-items: center; gap: 6px; margin-top: 16px; min-height: 48px; }
+.ach-opt label { display: flex; align-items: center; gap: 10px; font-size: 16px; cursor: pointer; }
+.ach-opt input { width: 20px; height: 20px; }
 .ach-tabs {
   display: flex; gap: 4px; overflow-x: auto; scrollbar-width: thin;
   position: sticky; top: 0; z-index: 3; padding: 6px 0; margin-bottom: 14px;

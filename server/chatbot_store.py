@@ -391,6 +391,23 @@ def clean_nhuong_tay(v: Any) -> Optional[int]:
     return n if 0 <= n <= NHUONG_TAY_TOI_DA else None
 
 
+# Minutes between two owner bells for one chat when the bot leaves hard messages to the owner (issue #1838). Unset =
+# `chatbot_runtime.BAO_CHU_BELL_GAP_S` (10 minutes); 0 = ring for every escalation. Messages inside the gap are never
+# dropped: they ring together once when it ends.
+BELL_GAP_MAX = 240
+
+
+def clean_bell_gap(v: Any) -> Optional[int]:
+    """A valid bell gap in minutes (0 to `BELL_GAP_MAX`), or None when unset or unreadable."""
+    if v is None or isinstance(v, bool) or str(v).strip() == "":
+        return None
+    try:
+        n = int(str(v).strip())
+    except (TypeError, ValueError):
+        return None
+    return n if 0 <= n <= BELL_GAP_MAX else None
+
+
 # Per-chat exceptions (0.172.0): ONE private chat gets its own permission level and wait time. Asked by the owner of a
 # personal Zalo nick on 2026-10-14: the bot that answers ~90 parents at "read only" must also help the owner's mother edit
 # her Word/Excel files. Raising the whole bot would hand those tools to every stranger who messages the nick; the risk
@@ -515,9 +532,72 @@ def ap_ngoai_le(cfg: dict, meta: Optional[dict]) -> dict:
     return dict(cfg, muc_quyen=e["muc_quyen"], _ngoai_le=dict(e), _muc_bot=cfg.get("muc_quyen"))
 
 
+def clean_staff_contact(v: Any) -> dict:
+    """The bot's staff contact ("Người phụ trách", 2026-11-26): ONE chat on one of the bot's channel accounts that the
+    bot asks when a customer wants something only a person knows (see staff_requests.py).
+
+    Accepts a dict or its JSON text (what the dashboard form sends). Returns {"account_id", "chat_id", "chat_type",
+    "name"}, or {} for none: an empty value, an unreadable one, or one without both ids. Scoped to the account like a
+    per-chat exception, so the same chat id on another account or channel never counts."""
+    if isinstance(v, str):
+        t = v.strip()
+        if not t:
+            return {}
+        try:
+            v = json.loads(t)
+        except ValueError:
+            return {}
+    if not isinstance(v, dict):
+        return {}
+    aid, cid = _clean_ma(v.get("account_id")), _clean_ma(v.get("chat_id"))
+    if not aid or not cid:
+        return {}
+    return {"account_id": aid, "chat_id": cid,
+            "chat_type": "group" if str(v.get("chat_type") or "") == "group" else "private",
+            "name": " ".join(str(v.get("name") or "").split())[:60]}
+
+
 def clean_bat(v: Any) -> bool:
     """Công tắc bật/tắt gửi từ form ("1", "true", "on", True...)."""
     return v is True or str(v if v is not None else "").strip().lower() in ("1", "true", "yes", "on")
+
+
+DEFAULT_QUIET_WAIT_S = 5      # seconds a customer must be quiet in a private chat before the bot answers
+QUIET_WAIT_MAX_S = 60
+
+
+def clean_quiet_wait(v: Any):
+    """Seconds to wait for a customer to finish typing in a private chat (issue #1873). None = not set (default 5)."""
+    if v is None or isinstance(v, bool) or str(v).strip() == "":
+        return None
+    try:
+        n = float(str(v).strip())
+    except ValueError:
+        return None
+    if n != int(n) or not 0 <= n <= QUIET_WAIT_MAX_S:
+        return None
+    return int(n)
+
+
+def quiet_wait_of(cfg: dict, meta: Optional[dict], default: float = DEFAULT_QUIET_WAIT_S) -> float:
+    """Seconds this private chat must be quiet before the bot answers: the chat's own exception (`cho_giay`), else the
+    bot's `quiet_wait_s`, else `default`. Not a private chat (a group, a comment under a post): 0, answer at once."""
+    m = meta or {}
+    if str(m.get("chat_type") or "") != "private" or m.get("comment"):
+        return 0.0
+    e = ngoai_le_cua(cfg or {}, m)
+    if e and e.get("cho_giay") is not None:
+        return float(e["cho_giay"])
+    own = (cfg or {}).get("quiet_wait_s")
+    return float(own) if own is not None else float(default)
+
+
+def clean_escalate_private(v: Any):
+    """"Hard question in a private chat: stay quiet and tell me" (issue #1864). None = the owner never set it, so the
+    bot keeps the old rule (on only in "Tự đánh giá", `reply_when == "auto"`); otherwise True/False from the form."""
+    if v is None or str(v).strip() == "":
+        return None
+    return clean_bat(v)
 
 
 def group_typing_on(cfg: dict) -> bool:
@@ -672,6 +752,8 @@ def _public(b: dict) -> dict:
     out["gio_truc"] = parse_gio_truc(out.get("gio_truc"))[0] or {}
     # Per-chat exceptions (0.172.0). Missing key = old record = none; a broken value also reads as none (narrowest).
     out["ngoai_le"] = parse_ngoai_le(out.get("ngoai_le"))[0] or []
+    # Staff contact (2026-11-26). Missing key = old record = none: nothing changes for that bot.
+    out["staff_contact"] = clean_staff_contact(out.get("staff_contact"))
     # Bộ phán xử hội thoại nhóm (0.65.0). Thiếu khoá = bản ghi cũ = tắt; có khoá mà hỏng = phía hẹp nhất.
     import chatbot_reply_policy
     out["reply_policy"] = chatbot_reply_policy.normalize_config(out.get("reply_policy"))
@@ -1038,21 +1120,29 @@ def create_bot(data: dict) -> tuple[Optional[str], str]:
             "gio_truc": gio_truc,
             # None = not set by the owner (channel default, old group behaviour); see `clean_nhuong_tay`.
             "nhuong_tay_phut": clean_nhuong_tay(data.get("nhuong_tay_phut")),
+            # None = not set: the default gap between two owner bells of one chat (see `clean_bell_gap`).
+            "bell_gap_min": clean_bell_gap(data.get("bell_gap_min")),
             "ngoai_le": ngoai_le,
             # Tự nhận lời mời kết bạn và đọc lời giới thiệu (0.172.0, chỉ Zalo cá nhân). Mặc định TẮT: nhận kết bạn
             # là hành động ra ngoài dưới tên chủ, chỉ bật khi chủ chọn.
             "nhan_ket_ban": clean_bat(data.get("nhan_ket_ban")),
             # "Đang soạn tin" in groups once the bot decided to answer (personal Zalo, 09/11/2026). Default ON.
             "group_typing": group_typing_on(data),
+            # Hard question in a private chat: stay quiet and ring the owner (issue #1864). None = old rule.
+            "escalate_private": clean_escalate_private(data.get("escalate_private")),
+            # Seconds to wait for a customer to finish typing in a private chat, every channel (issue #1873).
+            "quiet_wait_s": clean_quiet_wait(data.get("quiet_wait_s")),
             # Zalo chat labels the bot stays out of (0.281.0, personal Zalo only), e.g. family and friends.
             "skip_labels": clean_skip_labels(data.get("skip_labels")),
+            # Staff contact the bot asks when only a person knows the answer (2026-11-26, staff_requests.py).
+            "staff_contact": clean_staff_contact(data.get("staff_contact")),
             "handoff_to": str(data.get("handoff_to") or "").strip(),
             "created_at": _now(),
             "updated_at": _now(),
         }
         d["bots"].append(bot)
         _save(d)
-    _nhan_brain_cho_tk(bot)
+    _nhan_brain_cho_tk(bot, account_ids_of(bot))
     try:
         # A brain copied from another machine may hold what a bot with this slug learned there: import it now, before
         # the judge writes anything of its own (see learned_mirror).
@@ -1063,19 +1153,21 @@ def create_bot(data: dict) -> tuple[Optional[str], str]:
     return bot["id"], ""
 
 
-def _nhan_brain_cho_tk(bot: dict) -> None:
+def _nhan_brain_cho_tk(bot: dict, just_added=()) -> None:
     """Tài khoản bot này giữ mà CHƯA có brain chủ thì nhận brain của bot (0.62.4).
 
     Tab Tài khoản bot lọc theo brain, nên một tài khoản không chủ là một thẻ lơ lửng hiện ở
-    mọi brain. Gắn bot vào chính là lúc biết được nó thuộc về đâu. `nhan_brain` không ghi đè
-    chủ cũ, nên gọi ở đây an toàn kể cả khi tài khoản đã có brain.
+    mọi brain. Gắn bot vào chính là lúc biết được nó thuộc về đâu. Kênh đã có chủ thì giữ chủ,
+    trừ kênh trong `just_added`: người dùng vừa tick nó vào bot (form bot hiện kênh của mọi brain
+    từ 27/11/2026), nên nó sang brain của bot, để hộp thư của brain đó không giấu chat bot đang trả lời.
     """
     br = str((bot or {}).get("brain") or "").strip()
     if not br:
         return
+    moi = set(just_added or ())
     for aid in account_ids_of(bot or {}):
         try:
-            channel_accounts.nhan_brain(aid, br)
+            channel_accounts.nhan_brain(aid, br, take_over=aid in moi)
         except Exception:      # noqa: BLE001 - kho tài khoản hỏng không được làm hỏng lưu bot
             pass
 
@@ -1088,7 +1180,7 @@ _PATCHABLE = ("name", "icon", "groups", "people", "audience", "reply_when", "han
               "agent_slug", "agent_brain", "brain", "bot_username", "token", "enabled",
               "nguon_tra_loi", "muc_quyen", "ngon_ngu", "account_ids", "reply_policy", "gio_truc",
               "nhuong_tay_phut", "ngoai_le", "nhan_ket_ban", "skip_labels", "blocked",
-              "group_typing")
+              "group_typing", "bell_gap_min", "staff_contact", "escalate_private", "quiet_wait_s")
 # `channel` CỐ Ý đứng ngoài danh sách trắng. Đổi kênh của một bot đã tạo là đổi sang một CON
 # BOT KHÁC: token khác, danh tính khác, khách khác, và cả đống id nhóm đang lưu lập tức vô
 # nghĩa. Cho sửa tại chỗ thì bản ghi còn nguyên tên và lịch sử của con cũ trong khi nó đã là
@@ -1127,7 +1219,7 @@ def update_bot(bot_id: str, patch: dict) -> tuple[bool, str]:
             return False, loi
         if can_xac_nhan_ngoai_le(ngoai_le_moi, (get_bot(bot_id) or {}).get("ngoai_le"), patch.get("xac_nhan_ngoai_le")):
             return False, _loi(LOI_CHUA_XAC_NHAN_NGOAI_LE)
-    acc_moi = None
+    acc_moi, just_added = None, []
     if "account_ids" in patch:
         acc_moi, loi = _clean_account_ids(patch.get("account_ids"), exclude_bot=bot_id)
         if loi:
@@ -1138,6 +1230,8 @@ def update_bot(bot_id: str, patch: dict) -> tuple[bool, str]:
             if b.get("id") != bot_id:
                 continue
             if acc_moi is not None:
+                cu = set(account_ids_of(b))
+                just_added = [a for a in acc_moi if a not in cu]
                 b["accounts"] = acc_moi
             for k in _PATCHABLE:
                 if k not in patch:
@@ -1189,14 +1283,35 @@ def update_bot(bot_id: str, patch: dict) -> tuple[bool, str]:
                         n = clean_nhuong_tay(v)
                         if n is not None:
                             b["nhuong_tay_phut"] = n
+                elif k == "bell_gap_min":
+                    # Blank clears it (back to the default); an unreadable value keeps the old one, like nhuong_tay_phut.
+                    if str(v if v is not None else "").strip() == "":
+                        b["bell_gap_min"] = None
+                    else:
+                        n = clean_bell_gap(v)
+                        if n is not None:
+                            b["bell_gap_min"] = n
                 elif k == "ngoai_le":
                     b["ngoai_le"] = ngoai_le_moi     # checked at the top, risk gate included
                 elif k == "nhan_ket_ban":
                     b["nhan_ket_ban"] = clean_bat(v)
                 elif k == "group_typing":
                     b["group_typing"] = group_typing_on({"group_typing": v})
+                elif k == "escalate_private":
+                    b["escalate_private"] = clean_escalate_private(v)
+                elif k == "quiet_wait_s":
+                    # Blank clears it (the default); an unreadable value keeps the old one, like bell_gap_min.
+                    if str(v if v is not None else "").strip() == "":
+                        b["quiet_wait_s"] = None
+                    else:
+                        n = clean_quiet_wait(v)
+                        if n is not None:
+                            b["quiet_wait_s"] = n
                 elif k == "skip_labels":
                     b["skip_labels"] = clean_skip_labels(v)
+                elif k == "staff_contact":
+                    # An empty or unreadable value clears it: the form sends "" when the owner picks "nobody".
+                    b["staff_contact"] = clean_staff_contact(v)
 
                 elif k == "handoff_to":
                     b["handoff_to"] = str(v or "").strip()
@@ -1246,7 +1361,7 @@ def update_bot(bot_id: str, patch: dict) -> tuple[bool, str]:
             return False, LOI_KHONG_CO_BOT
     # Ngoài khoá: `nhan_brain` tự lấy khoá của kho tài khoản, gọi trong `with _lock` ở đây là
     # giữ hai khoá lồng nhau không cần thiết.
-    _nhan_brain_cho_tk(_da_luu)
+    _nhan_brain_cho_tk(_da_luu, just_added)
     return True, ""
 
 
@@ -1284,6 +1399,12 @@ def delete_bot(bot_id: str) -> tuple[bool, str]:
         _save(d)
     _xoa_du_lieu_phan_xu(bot_id)
     _remove_learned_mirror(gone[0])
+    try:
+        # Questions the bot asked its staff hold customers' words: they go with the bot (2026-11-26).
+        import staff_requests
+        staff_requests.delete_bot(bot_id)
+    except Exception:      # noqa: BLE001 - cleaning must not fail the delete
+        pass
     return True, ""
 
 

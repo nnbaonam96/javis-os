@@ -53,18 +53,19 @@ from pathlib import Path
 
 import httpx
 
+import bot_split
 import chat_files
 import image_vision
 import localefmt
 import stt
-from bot_gateway import HangLuot, dong_vet, parse_chat_ids, ten_tool
+from bot_gateway import HangLuot, parse_chat_ids, ten_tool, with_trace
 from messenger_bot import _chunks, md_to_plain
 
 OAUTH_URL = os.getenv("JAVIS_ZALO_OA_OAUTH", "https://oauth.zaloapp.com/v4/oa/access_token")
 OPENAPI = os.getenv("JAVIS_ZALO_OA_OPENAPI", "https://openapi.zalo.me")
 
 CHANNEL = "zalo_oa"
-MAX_MSG = 1900               # Zalo allows 2000 per text; keep a margin
+MAX_MSG = bot_split.CHANNELS[CHANNEL].max_len   # Zalo allows 2000 per text; keep a margin
 MAX_DEDUPE = 4000
 NAME_RETRY_S = 600            # a customer whose name lookup failed is looked up again after 10 minutes, not per message
 MAX_NAMES = 2000
@@ -536,13 +537,19 @@ class ZaloOABot(HangLuot):
     async def _send(self, client, chat, text, reply_markup=None):
         if not str(text or "").strip() and self.giau_trang_thai:
             return
-        text = md_to_plain(text or localefmt.chu("(không có nội dung)", "(no content)"))
-        for chunk in _chunks(text, MAX_MSG):
-            d = await self._send_one(client, chat, chunk)
-            if not d.get("ok"):
-                self.last_error = d.get("error", "")
-                print(f"[zalo_oa send] {d.get('error')}", file=sys.stderr)
-                break
+        text = text or localefmt.chu("(không có nội dung)", "(no content)")
+        # A bot answer the Agent split into short messages (issue #1833, bot_split): one OA message per part, a short
+        # pause between them. `_send_one` remembers each part as the bot's own echo.
+        sends = bot_split.outgoing(text, bot_split.splits(CHANNEL, chat)) if self.giau_trang_thai else [text]
+        for i, part in enumerate(sends):
+            if i:
+                await asyncio.sleep(bot_split.PART_PAUSE_S)
+            for chunk in _chunks(md_to_plain(part), MAX_MSG):
+                d = await self._send_one(client, chat, chunk)
+                if not d.get("ok"):
+                    self.last_error = d.get("error", "")
+                    print(f"[zalo_oa send] {d.get('error')}", file=sys.stderr)
+                    return
 
     async def send_text(self, chat, text):
         text = md_to_plain(str(text or "").strip())
@@ -928,8 +935,7 @@ class ZaloOABot(HangLuot):
         if silent and not str(reply or "").strip() and not files:
             return
         if not self.giau_trang_thai:
-            trail = dong_vet(tools, time.monotonic() - t0)
-            reply = ((str(reply or "").rstrip() + "\n\n") if str(reply or "").strip() else "") + trail
+            reply = with_trace(reply, tools, time.monotonic() - t0)
         if str(reply or "").strip() or not files:
             await self._send(client, chat, reply)
         for f in files:
