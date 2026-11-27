@@ -581,6 +581,9 @@ class TelegramBot(HangLuot):
         chat_obj = msg.get("chat") or {}
         frm = msg.get("from") or {}
         name = " ".join(x for x in (frm.get("first_name", ""), frm.get("last_name", "")) if x).strip()
+        reply_to_bot = self._la_reply_bot(msg)
+        from ari_overrides import cfo_telegram_reply
+        cfo_reply = cfo_telegram_reply(msg) if reply_to_bot else None
         return {
             "platform": "telegram",
             "chat_id": str(chat_obj.get("id", "")),
@@ -593,7 +596,8 @@ class TelegramBot(HangLuot):
             "message_id": msg.get("message_id"),
             "bot_username": self.bot_username,
             "mentioned": self._co_nhac_ten(msg),
-            "reply_to_bot": self._la_reply_bot(msg),
+            "reply_to_bot": reply_to_bot,
+            **({"cfo_reply": cfo_reply} if cfo_reply else {}),
             # Forum topic of the message (2026-11-20): the answer goes back into it. Only for a real topic message:
             # a plain supergroup also puts `message_thread_id` on replies, and sending with it there fails.
             "thread_id": msg.get("message_thread_id") if msg.get("is_topic_message") else None,

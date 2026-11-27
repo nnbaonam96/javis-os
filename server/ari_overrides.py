@@ -48,6 +48,21 @@ def haravan_read_catalog(conn: dict, default_catalog):
     return default_catalog
 
 
+def cfo_telegram_reply(message: dict) -> dict | None:
+    """Read a same-group text reply after the adapter verifies the quoted bot's identity."""
+    chat = message.get("chat") or {}
+    quoted = message.get("reply_to_message") or {}
+    if chat.get("type") not in {"group", "supergroup"} or not chat.get("id"):
+        return None
+    if (quoted.get("chat") or {}).get("id") != chat["id"]:
+        return None
+    message_id = quoted.get("message_id")
+    text = quoted.get("text")
+    if type(message_id) is not int or message_id <= 0 or not isinstance(text, str) or not text.strip():
+        return None
+    return {"message_id": message_id, "text": text[:4096]}
+
+
 async def try_reply_hook(bot_id: str, cfg: dict, text: str, meta: dict, chat_id: str, channel: str,
                          *, brain_root, running: dict, stuck_counts: dict, chatbot_log, record_bot_message):
     """Ask plugin `truoc_tra_loi` hooks before calling the model; return reply dict or None."""
@@ -58,6 +73,9 @@ async def try_reply_hook(bot_id: str, cfg: dict, text: str, meta: dict, chat_id:
         vault = str(brain_root(cfg.get("brain") or "brain"))
         if plugins_host.has_reply_hooks(vault):
             turn_info = turn_context.from_meta(channel, meta, la_chu=False)
+            if (channel == "telegram" and turn_info["chat_type"] == "group"
+                    and turn_info["sender_id"] and meta.get("reply_to_bot") is True and meta.get("cfo_reply")):
+                turn_info["cfo_reply"] = meta["cfo_reply"].copy()
             reply = await plugins_host.fire_reply_hooks(vault, {
                 "text": text, "turn": turn_info, "bot_id": bot_id, "bot_slug": cfg.get("slug") or ""}) or ""
     except Exception as exc:  # noqa: BLE001 - fail-open so the model still answers

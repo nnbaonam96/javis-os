@@ -33,6 +33,8 @@ import chatbot_runtime  # noqa: E402
 import chatbot_store  # noqa: E402
 import conversations  # noqa: E402
 import plugins_host  # noqa: E402
+from ari_overrides import try_reply_hook  # noqa: E402
+from telegram_bot import TelegramBot  # noqa: E402
 
 _fails = []
 
@@ -180,6 +182,45 @@ ra = hoi("có ai không")
 check("tiếp quản: bot im, hook KHÔNG được hỏi",
       ra.get("im_lang") is True and nhat_ky() == [] and _goi_model == [])
 conversations.dat_che_do(ds[0]["id"], "ai")
+
+# 9. A Telegram approval is tied to the message that was actually replied to.
+telegram = TelegramBot("1:fake", "", None)
+telegram.bot_id = 123
+group = {"id": -100, "type": "supergroup"}
+draft_text = "Phiếu thử, 1.000.000 đ\n" + "Chi tiết " * 180 + "\nMã nháp: CFO-0123456789AB"
+draft = {"chat": group, "from": {"id": 123, "is_bot": True}, "message_id": 21, "text": draft_text}
+message = {
+    "chat": group, "from": {"id": 456}, "message_id": 22,
+    "text": "1 triệu", "reply_to_message": draft,
+}
+
+
+def telegram_hook_turn(raw_message, channel="telegram"):
+    if _LOG.exists():
+        _LOG.unlink()
+    metadata = telegram._build_meta(raw_message)
+    asyncio.run(try_reply_hook(
+        bid, chatbot_store.get_bot(bid), raw_message["text"], metadata, metadata["chat_id"], channel,
+        brain_root=lambda _: BRAIN, running={}, stuck_counts={},
+        chatbot_log=type("Log", (), {"ghi": staticmethod(lambda *_: None)}),
+        record_bot_message=lambda *_: None,
+    ))
+    return nhat_ky()[0]["turn"]
+
+
+os.environ["TRUOC_TEST_MODE"] = "none"
+turn = telegram_hook_turn(message)
+check("Telegram: hook receives same-group bot reply ID and entire draft",
+      turn.get("cfo_reply") == {"message_id": 21, "text": draft_text}
+      and turn.get("sender_id") == "456" and turn.get("la_chu") is False)
+check("Telegram: reply to another bot is not approval metadata",
+      "cfo_reply" not in telegram_hook_turn(dict(message, reply_to_message=dict(draft, **{"from": {"id": 999}}))))
+check("Telegram: hand-typed quote is not approval metadata",
+      "cfo_reply" not in telegram_hook_turn(dict(message, text=draft_text, reply_to_message=None)))
+check("Telegram: quoted message from another group is discarded",
+      "cfo_reply" not in telegram_hook_turn(dict(message, reply_to_message=dict(draft, chat={"id": -200}))))
+check("Telegram: quoted metadata is not passed on a different channel",
+      "cfo_reply" not in telegram_hook_turn(message, channel="zalo"))
 
 if _fails:
     print(f"\nFAIL {len(_fails)} ca: {_fails}")
