@@ -3,7 +3,7 @@
 ## Luồng hiện tại
 
 Cron VPS (`/usr/local/bin/ari-build-dispatch`) gọi `ari-build.yml` trên `nnbaonam96/javis-os`, nhánh `ari-main` khi nguồn đổi (và tự dừng không spam khi đang có issue `ari-build-do` mở trên cùng SHA `ari-main`).
-Workflow tách bản vá Ari vào module riêng (`server/ari_overrides.py`, `server/ari_house_grounding.py`, `server/ari_antigravity_turn.py`, móc tối thiểu ở `main.py` / `channels/api.py` / `antigravity_cli.py` / `chatbot_runtime.py`), chồng lên `main` gốc, chạy 4 shard `tests/run.py` cô lập + `common`, rồi xuất image GHCR.
+Workflow tách bản vá Ari vào module riêng (`server/ari_overrides.py`, `server/ari_house_grounding.py`, `server/ari_antigravity_turn.py`, móc tối thiểu ở `main.py` / `channels/api.py` / `antigravity_cli.py` / `chatbot_runtime.py`), tích hợp với commit `main` gốc đã chốt để giữ các xung đột đã xử lý, chạy 4 shard `tests/run.py` cô lập + `common`, rồi xuất image GHCR.
 Test/build đỏ thì không xuất image; VPS giữ bản đang chạy.
 
 ## Chẩn đoán nhanh
@@ -13,7 +13,7 @@ Test/build đỏ thì không xuất image; VPS giữ bản đang chạy.
 3. Lưu log ra tệp thay vì đổ toàn bộ ra màn hình:
    `gh run view RUN_ID -R nnbaonam96/javis-os --log-failed > build-failed.log`.
    Tìm `FAIL`, `CHẠY LẠI MỘT MÌNH`, `error`, và tên bước lỗi.
-4. Xung đột rebase: giữ cả thay đổi gốc và ý nghĩa bản vá Ari.
+4. Xung đột khi tích hợp nguồn gốc: giữ cả thay đổi gốc và ý nghĩa bản vá Ari.
    Test đỏ: kiểm tra test chạy riêng và CI gốc ở cùng upstream SHA.
    Build/push đỏ: xem log Docker/GHCR, không sửa test để vượt qua.
 5. Nguồn từng đỏ được cache. Sau khi sửa, push tạo nguồn mới; nếu chỉ thử lại

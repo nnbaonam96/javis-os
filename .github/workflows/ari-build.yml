@@ -4,7 +4,7 @@ name: Ari - dựng image Javis có bản vá
 #
 # Nhánh `ari-main` = bản gốc + các module vá riêng (`ari_overrides.py`, `ari_house_grounding.py`,
 # hook `truoc_tra_loi`, Antigravity turn key) + chính file này. Mỗi 30 phút cron VPS kích hoạt:
-#   1. prepare: kéo `main` mới nhất của repo gốc, kiểm tra cache/GHCR, rồi rebase bản vá lên trên;
+#   1. prepare: kéo `main` mới nhất của repo gốc, kiểm tra cache/GHCR, rồi tích hợp nguồn gốc vào bản dựng;
 #   2. python (4 shard song song qua tests/run.py cô lập) + common (compileall, ignore, english, import, JS);
 #   3. publish: dựng image và đẩy lên ghcr.io/nnbaonam96/javis-os (:latest, :<VERSION>-ari, :src-...);
 #   4. notify: nếu đỏ thì lưu dấu đỏ theo (up, ari) và mở/nhắc đúng MỘT issue `ari-build-do`.
@@ -41,13 +41,13 @@ jobs:
       up_full: ${{ steps.resolve.outputs.up_full }}
       ari: ${{ steps.resolve.outputs.ari }}
       tag: ${{ steps.resolve.outputs.tag }}
-      version: ${{ steps.rebase.outputs.version }}
+      version: ${{ steps.integrate.outputs.version }}
       skip: ${{ steps.have.outputs.skip }}
-      rebase_outcome: ${{ steps.rebase.outcome }}
+      integration_outcome: ${{ steps.integrate.outcome }}
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: ari-main
+          ref: ${{ github.sha }}
           fetch-depth: 0
 
       - name: Lấy SHA nguồn gốc và nhánh Ari
@@ -93,18 +93,18 @@ jobs:
           fi
 
       - name: Chồng bản vá lên main mới nhất của repo gốc
-        id: rebase
+        id: integrate
         if: steps.have.outputs.skip != 'true'
         shell: bash
         run: |
           git config user.name "ari-build"
           git config user.email "ari-build@users.noreply.github.com"
           up="${{ steps.resolve.outputs.up }}"
-          if ! git rebase "${{ steps.resolve.outputs.up_full }}"; then
-            git rebase --abort || true
+          if ! git merge --no-edit "${{ steps.resolve.outputs.up_full }}"; then
+            git merge --abort || true
             echo "::error::Bản vá không chồng được lên repo gốc $up (xung đột). KHÔNG dựng image, VPS giữ bản cũ."
             { echo "### ĐỎ: bản vá xung đột với repo gốc \`$up\`"
-              echo "VPS vẫn chạy bản cũ. Mở phiên ở \`javis-os-bong\` để rebase nhánh \`ari-main\`."; } >> "$GITHUB_STEP_SUMMARY"
+              echo "VPS vẫn chạy bản cũ. Mở phiên ở \`javis-os-bong\` để tích hợp nguồn gốc vào nhánh \`ari-main\`."; } >> "$GITHUB_STEP_SUMMARY"
             exit 1
           fi
           version=$(tr -d ' \n\r' < VERSION)
@@ -129,7 +129,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: ari-main
+          ref: ${{ github.sha }}
           fetch-depth: 0
 
       - name: Chồng bản vá lên đúng commit gốc đã chốt
@@ -138,7 +138,7 @@ jobs:
           git config user.name "ari-build"
           git config user.email "ari-build@users.noreply.github.com"
           git fetch --no-tags "$UPSTREAM" main:refs/remotes/upstream/main
-          git rebase "${{ needs.prepare.outputs.up_full }}"
+          git merge --no-edit "${{ needs.prepare.outputs.up_full }}"
 
       - uses: actions/setup-python@v5
         with:
@@ -162,7 +162,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: ari-main
+          ref: ${{ github.sha }}
           fetch-depth: 0
 
       - name: Chồng bản vá lên đúng commit gốc đã chốt
@@ -171,7 +171,7 @@ jobs:
           git config user.name "ari-build"
           git config user.email "ari-build@users.noreply.github.com"
           git fetch --no-tags "$UPSTREAM" main:refs/remotes/upstream/main
-          git rebase "${{ needs.prepare.outputs.up_full }}"
+          git merge --no-edit "${{ needs.prepare.outputs.up_full }}"
 
       - uses: actions/setup-python@v5
         with:
@@ -202,7 +202,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: ari-main
+          ref: ${{ github.sha }}
           fetch-depth: 0
 
       - name: Chồng bản vá lên đúng commit gốc đã chốt
@@ -211,7 +211,7 @@ jobs:
           git config user.name "ari-build"
           git config user.email "ari-build@users.noreply.github.com"
           git fetch --no-tags "$UPSTREAM" main:refs/remotes/upstream/main
-          git rebase "${{ needs.prepare.outputs.up_full }}"
+          git merge --no-edit "${{ needs.prepare.outputs.up_full }}"
 
       - uses: actions/setup-node@v4
         with:
@@ -284,11 +284,11 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           UP: ${{ needs.prepare.outputs.up }}
-          REBASE_OUTCOME: ${{ needs.prepare.outputs.rebase_outcome }}
+          INTEGRATION_OUTCOME: ${{ needs.prepare.outputs.integration_outcome }}
         run: |
           run_url="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
-          if [ "$REBASE_OUTCOME" = "failure" ]; then
-            ly_do="Bản vá Ari **xung đột** với bản gốc \`${UP:-?}\` (git rebase dừng)."
+          if [ "$INTEGRATION_OUTCOME" = "failure" ]; then
+            ly_do="Bản vá Ari **xung đột** với bản gốc \`${UP:-?}\` (git merge dừng)."
           else
             ly_do="Bản vá chồng được lên bản gốc \`${UP:-?}\` nhưng **test đỏ** hoặc bước dựng image hỏng."
           fi
